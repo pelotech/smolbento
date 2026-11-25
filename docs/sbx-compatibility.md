@@ -7,19 +7,9 @@ and `--json` output against v0.53.
 Anything not implemented yet still parses and exits with status **2** and prints a message, so
 scripts fail clearly instead of doing something different.
 
-What this page says about sbx is what we measured on those versions, or read in Docker's
-documentation. It can be out of date or mistaken: Docker's documentation is the authority. Items
-marked "not measured" are our best guess, and [Not measured against sbx
-yet](#not-measured-against-sbx-yet) lists more. Corrections are welcome as
-[issues](https://github.com/pelotech/smolbento/issues).
-
-On this page: [Works today](#works-today) · [Parses, not implemented yet (exit
-2)](#parses-not-implemented-yet-exit-2) · [Never (Docker Cloud only, exit
-2)](#never-docker-cloud-only-exit-2) · [SSH](#ssh) · [Differences you'll
-notice](#differences-youll-notice) · [Skills](#skills) · [MCP servers](#mcp-servers) ·
-[Templates](#templates) · [Environment files](#environment-files) · [Sandbox
-environment](#sandbox-environment) · [SSH agent](#ssh-agent) · [Kits](#kits) · [Exit
-codes](#exit-codes)
+What this page says about sbx is measured on those versions or read in Docker's documentation,
+which is the authority. It can be out of date. Items marked "not measured" are our best guess.
+Corrections are welcome as [issues](https://github.com/pelotech/smolbento/issues).
 
 ## Works today
 
@@ -32,7 +22,7 @@ codes](#exit-codes)
 
 smolbento-only:
 
-- `start` and `exec --privileged`. sbx 0.53 no longer has them; smolbento keeps them.
+- `start` and `exec --privileged`. sbx 0.53 dropped them; smolbento keeps them.
 - `fork`. sbx has none; its `template save` saves only the disk.
 - `daemon`. Accepted and does nothing.
 - `kit mounts ls|rm`. Lists and removes the directories kept for kits' host mounts. sbx keeps
@@ -75,30 +65,28 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
 | | sbx | smolbento |
 |---|---|---|
 | Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). More below. |
-| `setup ssh remove` | Removes the block | Same; touches nothing outside our markers |
 | `--auto-create` | Adds desktop app connections | Not supported |
 | Sessions | The daemon terminates SSH; an unknown sandbox is an error; a stopped one is started | Same, in the `ProxyCommand` process. The shell is the session user's login shell in the workspace, on a pty from your terminal |
 | Local forwarding (`ssh -L`) | To the sandbox's loopback | Same, `localhost`, `127.0.0.0/8` and `::1` only. Each connection runs `nc` in the sandbox, else bash's `/dev/tcp`; with neither, the forward fails with a message |
 | SFTP, `scp`, agent forwarding, X11, remote forwarding | Not documented | Refused |
-| `env` requests | Acknowledged and ignored | Same |
 | Signals, exit signals | Not documented | A signal sent over SSH isn't delivered; a command killed by signal `n` exits with `128+n` |
 
 - **Config block:** Added at the top of the file, ending with `Host *` so your own top-level options
-  keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile
-  /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `bento ssh proxy`, a
-  child process of `ssh` on a pipe, so there is no network path to impersonate and a host key
-  protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses
-  a new key. `ProxyCommand` uses absolute paths, `'<bento>' ssh proxy %n` (prefixed with `env
-  SMOLBENTO_SMOLVM=… SMOLBENTO_SMOLVM_HOME=…` for the ones you set), found when you run `setup ssh`
-  (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No
-  `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and
-  `IdentitiesOnly yes` already keep keys out)
+  keep their scope. The options are sbx's, except that `StrictHostKeyChecking no`,
+  `UserKnownHostsFile /dev/null` and `LogLevel ERROR` replace the known-hosts ones. The server is
+  `bento ssh proxy`, a child process of `ssh` on a pipe, so there is no network path to impersonate
+  and a host key protects nothing. There is no `ssh known-hosts` command and no host key file; each
+  connection uses a new key. `ProxyCommand` uses absolute paths (with `env SMOLBENTO_SMOLVM=…
+  SMOLBENTO_SMOLVM_HOME=…` for the ones you set), found when `setup ssh` runs, because an IDE
+  started from the Dock has a minimal PATH. Run it again after moving either. No `IdentityAgent
+  none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and `IdentitiesOnly yes`
+  already keep keys out). `setup ssh remove` touches nothing outside our markers.
 
 ## Differences you'll notice
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Network | Default-deny policy | Same modes and rule syntax. A hosted sandbox (the default) enforces host rules and ports as sbx does, for each connection that names its host (TLS SNI or HTTP `Host:`); a connection with no name is judged by address and port only (see [Hosted egress](network-and-secrets.md#hosted-egress)). A denied connection is reset after it opens (sbx answers `403`). With `network.egress=smolvm`, and for connections with no name, rules are looser: `*.x.com` matches any depth (sbx: one label), wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`, and ports aren't enforced (`policy ls --wide` shows which, in STATUS). Method, path and query rules are enforced per request on hosted sandboxes, with HTTP caveats and the bypasses in [Request rules](network-and-secrets.md#request-rules); a refusal is sbx's `403`. With `network.egress=smolvm` they aren't, and a request deny acts on its whole host. `balanced` is sbx's 195 rules plus Nix caches, on any port |
+| Network | Default-deny policy | Same modes and rule syntax. A hosted sandbox (the default) enforces host rules and ports for each connection that names its host (TLS SNI or HTTP `Host:`), and method, path and query rules per request ([Hosted egress](network-and-secrets.md#hosted-egress), [Request rules](network-and-secrets.md#request-rules)). A denied request gets sbx's `403`; a denied connection is reset after it opens. A connection with no name is judged by address and port only. With `network.egress=smolvm`, and for unnamed connections, rules are looser: `*.x.com` matches any depth (sbx: one label), wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`, and ports aren't enforced (`policy ls --wide` shows which, in STATUS). With `network.egress=smolvm`, request rules aren't enforced either, and a request deny acts on its whole host. `balanced` is sbx's 195 rules plus Nix caches, on any port |
 | Host deny rules | Always enforced | A hosted sandbox enforces them by name, under allow-all and inside a broader allow too, ports included; IP and CIDR denies apply live. With `network.egress=smolvm`: not enforced under allow-all, nor where a broader allow covers the host. Only deny CIDRs are enforced (at create). A deny with a port isn't enforced, because smolvm can't filter by port. The exception: a deny with the same text as an allow cancels that allow. `policy check` and `policy deny` say so |
 | Secrets | Proxy injects on the wire | The sandbox's egress process (smolvm with `network.egress=smolvm`) substitutes on the wire. A secret's hosts and their subdomains are always reachable from sandboxes that bound it (`policy deny` of one is refused). A new value applies to a running sandbox at once and to a stopped one at its next start. A service a sandbox was created without needs a recreate on a hosted sandbox (`secret set` says so); with `network.egress=smolvm` it applies to a running sandbox at once, and to one that booted with no secrets at all from its next start. A removed value stops being sent by running sandboxes at once: they get the entry that still applies (the global one, or a fork's original's), else a fixed non-secret value |
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host, or `*.domain` for any depth (not the apex). Other wildcards and IPs are refused: smolvm substitutes secrets only for host names |
@@ -116,7 +104,6 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
 | Fetch on exit | None | `bento run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
 | Fetch from a stopped sandbox | Needs the sandbox running | Starts it, fetches, stops it again |
 | Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
-| Install-phase kit rules in `policy ls` | Not listed after create | Same: listed only while they're in effect, during a create's or `kit add`'s install hooks |
 | `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
 | Default name held by another directory | `create` refuses (`sandbox name … is already used by workspace …; pass --name …`); `run` reattaches to the current directory's sandbox (0.53) | Same, and the refusal suggests a name (`such as --name <agent>-<parent>-<directory>`). smolbento-only `sandbox.autoName` takes it instead of refusing. `run` finds this directory's sandbox by its workspace and agent |
 | `reset` | Resets to a freshly installed state: stops and deletes sandboxes, clears the image cache, policy, the managed SSH config, secrets (unless `--preserve-secrets`), and all state, cache and config directories; also signs out, stops the daemon and clears Gordon's history | Same: sandboxes (and smolbento's leftovers in smolvm's default location, never machines without its labels), `~/.smolbento` (smolvm's state, images and the downloaded smolvm), the SSH config block, background services, and smolbento's config, cache and data directories (kit host-mount directories included). More below. |
@@ -124,8 +111,6 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
 | Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. More below. |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete`, `policy ls`/`list`, `policy rm`/`remove`/`delete`, `mcp rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX <revision>` | `bento version vX` (no revision); `bento version` also shows the smolvm version |
-| Errors | `error: …`, and a suggestion as `  try: sbx ls` on its own line | Same, with `bento` |
-| `stop`, `rm`, `prune` text | `Stopped sandbox NAME`, `Removed sandbox NAME` | Same |
 | `settings ls` | `KEY VALUE TYPE SOURCE RESTART DESCRIPTION`, sorted, cells cut; `--no-trunc` prints a block per setting | Same. `RESTART` is always empty (no daemon); `TYPE` is `bool` or `string` |
 | `policy ls` layout | 0.53: one row per policy (`POLICY SOURCE APPLIES TO SUMMARY`); `--wide` a row per rule in 14 columns; `--json` and `--format yaml` are `{"rules":[…]}`; `policy ls SANDBOX` a summary (`Policy for sandbox:`, `NETWORK`, `FILESYSTEM`) | Same layouts, texts and JSON key order. The differences are the rows below |
 | `policy ls`: the mode | No mode line. The `default-deny-all` policy (`network: deny when no rule decides`) is the fallback | Same: no `Mode:` line. `balanced` and `deny-all` show `default-deny-all` (`balanced` also lists its preset groups in `local-policy`). `allow-all`, and a policy with no mode chosen yet, show `default-allow-all` (`network: allow when no rule decides`) instead: smolbento-only |
@@ -153,14 +138,10 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
   services on `0.0.0.0` are too (sbx blocks this). See
   [Security](SECURITY.md#host-services-localhost-rules)
 - **`reset`:** No sign-out, daemon or Gordon
-- **Browser and clipboard:** Served by a launchd or `systemd --user` unit whenever the sandbox runs;
-  without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the
-  fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No
-  `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the
-  first attached session. Forks keep the parent's socket, so they use its bridge while it is served.
-  Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body
-  (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units,
-  per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard)
+- **Browser and clipboard:** Served by a launchd or `systemd --user` unit whenever the sandbox runs.
+  Without a service manager, only while attached (`run`, `exec -it`). No image paste (sbx doesn't
+  read clipboard text either) and no `SBX_HOST_SESSION_ID`. Forks keep the parent's socket, so they
+  use its bridge while it is served. Login-relay limits: [Usage](usage.md#browser-and-clipboard)
 
 ### Output formats
 
@@ -334,45 +315,13 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | Forks | No forks | No agent or units of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 
-Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
-(`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
+Docker's kit-spec conformance suite (`just conformance`, at `SPEC_COMMIT`) checks this capability
+through `tests/conformance/smolbento-adapter`. The adapter claims `ssh-agent@1`, `host-mount@1`,
 `lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`/`@2`, `long-running@1`, `privileged@1`,
-`resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
-bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
-pass: a workload's first process starts only once the start's install steps, files, agent context and
-startup hooks are done, and after the runtime agent's unit is up. `agent-context@2/delivery`,
-`materialized` and `mixed-versions` pass; `selection-boundaries` needs `volume@1`, not claimed, so it
-skips. The failures left are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
-and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and
-`§7.1.2/exact-version`, which use the suite's selection controls (`--reject-capability`, selection
-records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
-(`environment-provided`, `-process`, `-internal`, `-hooks`, `-hooks-internal`,
-`identity-stable`, `identity-new-after-deletion`). Those read the environment the workload's agent
-was launched with by `create` and `start`. Like sbx 0.54, smolbento starts an `sbx@1` workload's
-agent only on `run` (sbx 0.54 runs only `sleep infinity` for the suite's own probe kit), so these
-checks fail on both. `identity-stable` also needs a `recreate`, which smolbento doesn't have. The
-adapter maps `--workspace-mode internal` to a sandbox without a workspace mount (its workspace is
-the image's `WORKDIR`) and refuses `none`, `host` and `cloned`, so those scenario checks skip.
-`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is
-applied, as the VM's size (`--mem`, which the spec allows), but the check reads only the cgroup's
-`memory.max`, and a smolvm machine's workload sees the cgroup2 root, which has none. It needs smolvm
-to give the workload its own cgroup with the VM's memory as `memory.max`, as it already does for
-pod containers; no adapter verb is involved, so the adapter can't report it.
-
-Not claimed, each for checks that fail: `dockerd@1` (the spec's `recreate` replaces the sandbox
-in place, keeping the engine store, and smolbento has no `recreate`); `volume@1` (it also needs
-volumes kept across delete and create, with commands to list and remove them; smolbento keeps
-volumes on the sandbox's disk, see [Kits](#kits)); `git-identity@1` (`recreate` and selection records are missing;
-`git-identity@1/global-defaults` passes); `agent-skills@1` and
-`agent-skill@1` (selection records); and `credential@1` (`inject-only-no-env` finds the CA variables
-that install steps keep, the recorded difference above; the rest that ran pass). The adapter can
-still run these slices (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`,
-`--skills-host-store` to its isolated store, `--git-identity-config` to the host git config bento
-reads, and binds the fixture's credential as a `secret set-custom --command` that reads
-the suite's dummy value from a 0600 file in `SMOLBENTO_TCK_HOME` at each start.
-The suite's isolated setup needs the units' socket path under 104 bytes (a short
-`SMOLBENTO_TCK_HOME`); a longer one falls back to attached-only serving and the boot-time checks
-fail.
+`resources@1` and `sbx@1`, under the `balanced` mode. All 11 `ssh-agent@1` checks pass. Not claimed:
+`dockerd@1`, `volume@1`, `git-identity@1`, `agent-skills@1`, `agent-skill@1` and `credential@1` (each
+needs `recreate`, selection records or retained volumes that smolbento doesn't have). The known
+failing checks, with the reasons, are in [tests/conformance](../tests/conformance/README.md).
 
 ## Kits
 
@@ -410,7 +359,7 @@ for an optional entry.
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes, removed with the sandbox; no retained volume storage to list or remove | Differs from the spec, which keeps volumes across delete and create: smolbento keeps them on the sandbox's disk, so `rm` and `reset` remove them, and `size` is ignored. Kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
-| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). Before, the later kit won the path. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
+| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
 | `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below) |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
@@ -497,8 +446,8 @@ for an optional entry.
 - Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
   only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others). When kits name files
   with `directory` and `filename`, it goes in each of those instead, a mixin's too, following
-  the spec. `kit add` of a kit that names a file needs a recreate.
-- Both layouts follow the spec and match sbx 0.54 ([Kits](kits.md#agent-instructions-from-kits)).
+  the spec. `kit add` of a kit that names a file needs a recreate. Both layouts match sbx 0.54
+  ([Kits](kits.md#agent-instructions-from-kits)).
 - A kit's network hosts follow the spec: `*` means everything, as `**` does, a v2 kit's
   `permissions.network` too (only `bento policy allow` refuses a bare `*`, as sbx does). A v2
   kit's resources, network, ports and volumes are read as their v3 capabilities, so their errors
@@ -510,24 +459,16 @@ for an optional entry.
   and its objects are checked as the spec says: an empty `methods` or `paths` list, `paths` without
   `methods`, a lowercase method, `ANY` beside another method, a path not starting with `/`, or a
   pattern in a bounded allow entry is an error.
-- A sandbox uses one `agent-context` version for all its kits: `@2`, unless a kit requires `@1`.
-  The spec refuses `@1` and `@2` requests together and leaves it to the runtime to accept one;
-  sbx's choice isn't measured. Docker's published agent kits offer both as optional, so they get
-  `@2`; `docker.io/sbx/amp` requires `@1` and gets that.
+- Docker's published agent kits offer both `agent-context` versions as optional, so they get `@2`;
+  `docker.io/sbx/amp` requires `@1` and gets that.
 - Not done yet: the runtime's own guidance at the top of the file (smolbento writes none), a
   size limit on the combined text, and per-file required or optional.
-- The settings are `kit.allowedSources` and `kit.allowLocalKits`
-  ([Configuration](configuration.md#settings)).
-- A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>` under
-  `~/.local/share/smolbento`, keyed on the kit that declares it (a mixin's own, not the workload's;
-  a local kit's key is its canonical directory). Parents are `0700`; the directory takes the kit's
-  `mode` (default `0755`) and an existing one is reused. Sandboxes of the same kit share it, and
-  `rm` keeps it. Beside each, `<sha256(path)>.json` records the kit and path for `kit mounts`;
-  a directory made before records existed gets one when a sandbox next uses it.
+- A `host-mount@1` directory is made under `~/.local/share/smolbento/kit-host-mounts/`, keyed on the
+  kit that declares it (a mixin's own, not the workload's) and the path
+  ([Kits](kits.md#kit-host-mounts)). Sandboxes of the same kit share it, and `rm` keeps it.
   `--mount HOST:SANDBOX_PATH` and `sbxenv.yaml` `mounts:` replace it, at create only, with sbx's
-  errors (`--mount "X" requires HOST:SANDBOX_PATH`,
-  `HOST "X" does not exist on the host`, `no kit declares host-mount@1 at "PATH"`). Two kits
-  declaring storage at one path fail with
+  errors (`--mount "X" requires HOST:SANDBOX_PATH`, `HOST "X" does not exist on the host`,
+  `no kit declares host-mount@1 at "PATH"`). Two kits declaring storage at one path fail with
   `kits A and B both declare storage at PATH; a host mount has one owner`.
 
 ### Differences
@@ -551,7 +492,7 @@ for an optional entry.
 | `kit validate` output | `✓ <ref> — valid`; `--json` is `{reference, kind, valid, warnings}` | Adds `--format table\|json\|yaml`. A failure with `--json` or `--format json\|yaml` prints the object with `valid: false` and `errors: [...]` on stdout and exits 1; table output prints the plain error |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit. Write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, one `dockerd@1` request, is added to Docker-enabled images (or `--kit docker`). smolbento starts dockerd before startup steps and fails the start if it doesn't answer within 60 s (`/var/log/dockerd.log`). smolvm's Docker Engine API (`smolvm engine`) isn't used: its containers are host machines that can bind any host path |
-| A kit providing `docker` (changed) | n/a | No longer replaces the shipped `docker` kit or stands in for the engine: declare `dockerd@1` (`autoStart: false` to start dockerd yourself) |
+| A kit providing `docker` | n/a | Doesn't replace the shipped `docker` kit or stand in for the engine: declare `dockerd@1` (`autoStart: false` to start dockerd yourself) |
 | v3 mixins on built-in agents | Allowed since sbx 0.53 (earlier: `no workload kit in the set`) | Allowed |
 | v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. |
 | v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Refused, the same way. The shipped `docker` kit and Smolfiles go with either format |
@@ -599,6 +540,9 @@ for an optional entry.
 - A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't
   measured.
 - The kits index after hand edits (a removed or duplicated marker, or text inside the block).
+- Also: a v3 mixin's context when the workload has an agent file, a hanging startup step, `setsid`
+  in the other `-docker` images, `git-identity` without a host identity, `kit add` of the same kit
+  twice, auto-stop timing, `policy ls --wide` columns, and the `kit validate` failure JSON.
 - Inferred, not measured: `kind` values other than `directory` (smolbento uses `file`, `registry`,
   `builtin`); `Schema:` for registry, builtin and Smolfile kits; network rule counts; the init-file
   count; the JSON layout under sandbox, permissions, credentials and setup; the failure object; and

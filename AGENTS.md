@@ -140,7 +140,9 @@ not listed here.
 | `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |
 | `config` | settings and precedence |
 | `policy` | network rules, presets, compile to smolvm flags |
+| `egress` | hosted egress: the per-sandbox `_serve egress` process that enforces rules and swaps secrets |
 | `util` | leaf helpers: shell quoting, hashing, size parsing |
+| `log` | `SMOLBENTO_LOG` and `-D`: step spans and timings on stderr |
 | `secrets` | sources, stores, resolve at start |
 | `skills` | shared skills store; `--skills` modes; kit skill capabilities |
 | `templates` | saved templates: smolvm packs, index, export archive |

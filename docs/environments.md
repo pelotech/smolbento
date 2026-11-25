@@ -42,9 +42,10 @@ bento env rm
 ```
 
 - Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, `~/.sbxenv.yaml` (if
-  present) then `./sbxenv.yaml` are read. Maps merge by key, lists concatenate, later values win; an
-  empty `key:` keeps the earlier value. Relative paths are relative to the file naming them. `${{
-  env.projectDir }}` is the first `PATH`'s directory (the current directory with no `PATH`, even
+  present) then `./sbxenv.yaml` are read.
+- Files merge: maps by key, lists concatenate, later values win; an empty `key:` keeps the earlier
+  value. Relative paths are relative to the file naming them.
+- `${{ env.projectDir }}` is the first `PATH`'s directory (the current directory with no `PATH`, even
   when `~/.sbxenv.yaml` is read). `${{ env.fileDir }}` is the declaring file's directory.
 - Only `true` and `false` are booleans. Text fields take numbers and booleans as written: `PORT:
   8080` and `DEBUG: on` are the strings `8080` and `on`.
@@ -65,38 +66,35 @@ bento env rm
   and without `--force`, an unapproved plan is refused. `env rm` asks `Remove? [y/N]` and forgets
   the approval. `env exec` never asks.
 - Lifecycle commands and `command:` sources of secrets and registries run on your machine with your
-  privileges. A file that declares any asks on every `env create` and `env run`. `bento settings set
-  env.rememberHostCommands true` keeps an approval until the commands change.
-- Commands run through `sh -c`, in `initialize` (every create and run, before anything),
+  privileges, so a file that declares any asks on every `env create` and `env run`. `bento settings
+  set env.rememberHostCommands true` keeps an approval until the commands change.
+  `--skip-host-commands` (on `env create`, `run`, `rm` and `plan`) skips all three lifecycle phases
+  without changing your approval.
+- Lifecycle commands run through `sh -c`, in `initialize` (every create and run, before anything),
   `postCreate` (after a new sandbox is created) and `preRemove` (`env rm`, after you confirm). A
   phase stops at the first failure or timeout. A failing `initialize` stops before anything is
   created; a failing `postCreate` keeps the sandbox and says to `bento env rm`; a failing `preRemove`
   only warns and removal goes on. Commands get `bento`'s environment plus `SBX_LIFECYCLE_PHASE`,
   `SBX_ENV_FILE`, `SBX_ENV_FILES` (joined with `:`), `SBX_ENV_DIR`, `SBX_SANDBOX_NAME`, `SBX_AGENT`
   and `SBX_WORKSPACE`, but not the file's `env` or any secret. Make `initialize` safe to run twice.
-  `--skip-host-commands` (on `env create`, `run`, `rm` and `plan`) skips all three phases without
-  changing your approval.
 - `env run` launches `entrypoint` and `cmd` in place of the agent. With only `cmd`, the agent's own
   command gets it as arguments. Plain `bento run NAME` is unaffected. The last file wins. Arguments
   after `--` (`bento env run . -- --base HEAD`) replace `cmd` for that run.
-- There's no `--agent` flag, and sbx has none either. Set `agent: ${{ env.args.agent }}` with a
-  declared `agent` arg instead: `bento env run --env-arg agent=opencode -- -c` runs `opencode -c`.
+- To pick the agent per run (there is no `--agent` flag, as in sbx), declare an `agent` arg and set
+  `agent: ${{ env.args.agent }}`: `bento env run --env-arg agent=opencode -- -c` runs `opencode -c`.
 - Registry logins pull this sandbox's image and kits. They're resolved at create and stored for that
   sandbox only, ahead of a host-wide `bento secret set --registry` login. They're removed with the
   sandbox.
 - Bindings add extra domains a service's credential may go to. As in sbx, they're global: they go
   into your secrets file at create, for every later sandbox. `env rm` leaves them; `env rm
-  --prune-bindings` removes each declared service's whole binding. The service must be one `bento
-  secret set` knows.
+  --prune-bindings` removes each declared service's whole binding.
 - `mcp.servers` entries with a `url` are registered as `bento mcp add` would (they stay after `env
   rm`) and given to the agent as `--static-mcp` does, with the same limits. Entries with a `command`
   are refused.
-- `env create` refuses an existing sandbox (use `env run`, or `env rm` first). Secrets are stored
-  before the sandbox is made; a failed create leaves them, and `env rm` with the same files removes
-  them.
-- On an existing sandbox, `env run` starts it if needed and attaches, passing the file's current
-  `env` values. Other changes (kits, ports, workspaces, secrets, options) need `env rm` and `env
-  create`.
+- `env create` refuses an existing sandbox. On an existing sandbox, `env run` starts it if needed
+  and attaches, passing the file's current `env` values; any other change (kits, ports, workspaces,
+  secrets, options) needs `env rm`, then `env create`. Secrets are stored before the sandbox is
+  made; a failed create leaves them, and `env rm` with the same files removes them.
 - `env exec` takes the `bento exec` flags and the command after `--`. Without `--`, every argument is
   the command and files come from the current directory. A command with options needs `--` (`bento env
   exec -- ls -la`).
@@ -137,10 +135,14 @@ bindings:
 ```
 
 Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
-`sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always`. `fuse` and
-`pullPolicy: missing|never` are accepted. `rootSize` sizes the disk for the root filesystem's
-changes, and `dockerSize` and `clonedWorkspaceSize` the disk for Docker's data and a clone's
-workspace (the larger wins), in sizes such as `30g`, rounded up to whole GiB. Environment files inside a writable mounted workspace are
-made read-only at each start, unless `writableEnvFiles: true`. `refresh` and `backend` on a secret
-do nothing. Secret service names must be ones `bento secret set` knows. See [sbx
-compatibility](sbx-compatibility.md#environment-files).
+`sandboxOptions.profile`, `display`, `gpu`, `usb` and `pullPolicy: always`.
+
+- `fuse` and `pullPolicy: missing|never` are accepted. `refresh` and `backend` on a secret do
+  nothing.
+- `rootSize`, `dockerSize` and `clonedWorkspaceSize` take sizes such as `30g`, rounded up to whole
+  GiB. `rootSize` sizes the disk for the root filesystem's changes; `dockerSize` and
+  `clonedWorkspaceSize` the disk for Docker's data and a clone's workspace (the larger wins).
+- Environment files inside a writable mounted workspace are made read-only at each start, unless
+  `writableEnvFiles: true`.
+- Secret service names must be ones `bento secret set` knows. See [sbx
+  compatibility](sbx-compatibility.md#environment-files).

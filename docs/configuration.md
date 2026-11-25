@@ -31,7 +31,7 @@ An environment variable beats the config file, which beats the default. Booleans
 | `kit.showWarnings` | `SMOLBENTO_KIT_SHOW_WARNINGS` | `false` | Show what smolbento skips or ignores of a kit's optional parts: unsupported optional capabilities, optional credentials without a secret, ignored v2 fields. `-D` shows them too. Off by default because the kit works without them. smolbento only. |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles. |
 | `kit.requireSignature` | `SMOLBENTO_KIT_REQUIRE_SIGNATURE` | `false` | Load registry kits only when a trusted signer signed them. Refuses local kits. See [Kit signatures](#kit-signatures). |
-| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker identities (`identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com`) and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
+| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker identities and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
 | `clipboard.textCopy` | `SMOLBENTO_CLIPBOARD_TEXT_COPY` | `false` | Let sandboxes copy text to your clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe` in the sandbox). See [Browser and clipboard](usage.md#browser-and-clipboard). |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
@@ -42,11 +42,7 @@ An environment variable beats the config file, which beats the default. Booleans
 | `env.rememberHostCommands` | `SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS` | `false` | Keep an approval of an environment file's host commands until they change. Otherwise `bento env create` and `bento env run` ask every time. |
 | `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | Default for a sandbox created without `--skills`: `off`, `readonly` or `readwrite`. See [Details](#details). |
 
-The `SMOLBENTO_*` names are smolbento's own. sbx has no environment variable per setting. The few
-variables its daemon reads (such as `DOCKER_SANDBOXES_PROXY` and `SBX_NO_TELEMETRY`) belong to
-settings smolbento doesn't have (measured on sbx v0.53.0).
-
-`kit.allowExtractedAgents` from sbx isn't available yet.
+The `SMOLBENTO_*` names are smolbento's own; sbx has no per-setting variables.
 
 ### Details
 
@@ -70,10 +66,8 @@ next login. A missing or unreadable file means no server is trusted and logins a
 [SSH agent](usage.md#ssh-agent).
 
 **`skills.defaultMode`** applies when a sandbox is created and neither `--skills` nor
-`sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with. A
-bad setting value is reported as `setting skills.defaultMode: ...`. A bad `--skills` or
-`sandboxOptions.skills` value is reported as `invalid skills mode "x": use off, readonly or
-readwrite`. See [Skills](kits.md#skills).
+`sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with. See
+[Skills](kits.md#skills).
 
 ### Kit sources
 
@@ -101,17 +95,15 @@ bento settings set kit.allowedSources '["docker.io/","ghcr.io/acme/"]'
 `settings set` checks the value first. A refused kit's error suggests the setting that would allow
 it.
 
-The setting covers kits only. The images a kit names (a workload kit's image, and the base image its
-layers are added to) are pulled without it, like a Dockerfile's `FROM`. Registries are reached over
-HTTPS, except loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP.
+The setting covers kits only, not the images a kit names ([Security](SECURITY.md#kits)).
 
 ### Kit signatures
 
 With `kit.requireSignature` set to `true`, a registry kit loads only if one of its signatures
 verifies for a signer in `kit.trustedSigners`. Verification uses `cosign`, from `PATH` or from
 `SMOLBENTO_COSIGN`. Local kits are refused while the setting is on. `--offline` skips the check, as
-in sbx. Built-in agents' kits (sbx publishes them unsigned) and shipped kits are exempt, and so
-are they from `kit.allowedSources`.
+in sbx. Built-in agents' kits (sbx publishes them unsigned) and shipped kits are exempt from this check
+and from `kit.allowedSources`.
 
 `kit.trustedSigners` is a JSON array. Each entry is either:
 
@@ -121,7 +113,8 @@ are they from `kit.allowedSources`.
 
 `kit.ignoreTransparencyLog` relaxes only the keyless check, which otherwise needs a Rekor entry.
 
-The default trusts Docker identities, as in sbx, and smolbento's own kit releases: issuer
+The default trusts Docker identities, as in sbx (`identityRegexp` `^.*@docker\.com$`, `issuer`
+`https://accounts.google.com`), and smolbento's own kit releases: issuer
 `https://token.actions.githubusercontent.com`, identity
 `https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main`.
 
@@ -145,7 +138,7 @@ Sign a kit with `bento kit sign --help`.
 | `~/.local/share/smolbento/templates/` | Saved templates: `templates.json` and the `<id>.smolmachine` packs |
 | `~/.local/share/smolbento/egress/<sandbox>/` | A hosted-egress sandbox's CA (its private key included; it can sign for any host, and the egress process decrypts only secret hosts and hosts with request rules), its interceptor token and `egress.log` (denied connections, unresolved secrets by name), in a 0700 directory. Removed with the sandbox. |
 | `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](kits.md#kit-host-mounts), kept after their sandboxes are removed |
-| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge\|egress>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge\|egress>.socket` and `…@.service` (`….service` for egress) (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
+| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge\|egress>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge\|egress>.socket` and `…@.service` (`….service` for egress) (Linux) | [Host service](usage.md#host-services) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
 `bento setup ssh` also edits one file outside these directories: `~/.ssh/config`, between its
@@ -169,49 +162,21 @@ error, so you can still inspect and fix the file.
 ## Where sandboxes live
 
 smolbento keeps no database. Each sandbox is a smolvm machine named `sbx-<name>` (with `.` in the
-name turned into `_`). Its details are stored as labels on that machine:
+name turned into `_`). Its details are stored as labels on that machine. The core ones:
 
 | Label | Value |
 |---|---|
 | `sbx.name` | Sandbox name |
 | `sbx.agent` | Agent it was created for |
 | `sbx.workspace` | Primary workspace path (absent for a sandbox without one) |
-| `sbx.workspaces` | All mounted paths, as a JSON list |
 | `sbx.created` | Creation time, unix seconds |
 | `sbx.id` | The sandbox's `SANDBOX_ID`, a UUID made at create (a fork gets its own) |
-| `sbx.docker` | Whether it runs a private Docker engine |
-| `sbx.secrets` | Services whose secrets were bound at create |
-| `sbx.credential-hosts` | Hosts those secrets use, recorded at create so the sandbox can always reach them |
-| `sbx.credential-env` | Env vars those secrets use. A start leaves out any without a value, even if the service is gone. |
-| `sbx.credential-install` | Env vars of credentials a kit needs only while installing. Later starts leave them out. |
-| `sbx.clone` | `true` for a `--clone` sandbox |
-| `sbx.clone-top` | Top of the cloned repo, when the workspace is a subdirectory of it |
 | `sbx.kits` | Kits applied at create, pinned to their digests |
-| `sbx.command` | The command a workload kit launches, as a JSON list |
-| `sbx.user` | The image user a v3 workload kit's agent and `exec` run as (`0` for root) |
-| `sbx.agent-file` | The agent instructions files the kits' `agent-context` names, comma-separated, so `kit add` can add a new mixin's context to each |
-| `sbx.agent-context` | The `agent-context` version (`1` or `2`) the sandbox's kit instructions were written under, so `kit add` keeps to it. Absent until a kit's instructions are written |
-| `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
-| `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the shared mount bound over it `ro` or `rw`), set at create |
-| `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 | `sbx.version` | The smolbento version that created it |
-| `sbx.fork-of` | The sandbox it was forked from |
-| `sbx.template` | The saved template it was created from |
-| `sbx.registries` | The kit builder's stored registry hosts, comma-separated, fixed at create |
-| `sbx.credential-format.<ENV>` | How a kit credential's value is formatted (`format:…` or `basic:<user>`) |
-| `sbx.credential-service.<ENV>` | The secret service behind a kit credential's env var, when it isn't one of that service's own |
-| `sbx.mcp` | The `--static-mcp` servers, comma-separated (empty for `none`; absent without the flag) |
-| `sbx.mcp-secret.<ENV>` | The `--static-mcp` server secret a guest env var is bound to |
-| `sbx.host-access` | `true` when created without the host loopback deny, because a `localhost` rule applied |
-| `sbx.bridge` | `true` when created with the browser and clipboard bridge socket |
-| `sbx.service` | `true` when launchd or `systemd --user` units own its host sockets |
-| `sbx.ssh-agent` | The SSH agent granted at create, per phase, as JSON |
-| `sbx.host-mounts` | Kit host mounts: guest path to host directory, as a JSON object |
-| `sbx.no-fuse` | `true` when created without `/dev/fuse` (an environment file's `sandboxOptions.fuse: false`) |
-| `sbx.read-only-files` | Workspace files made read-only at each start (an environment's files), as a JSON list |
 
-`bento smolvm machine ls` shows these. Machines you make with `bento smolvm` sit next to smolbento's
-sandboxes, but `bento ls` shows only the ones smolbento made.
+The rest (secrets bound at create, host access, skills, and so on) are `sbx.*` labels too.
+`bento smolvm machine ls --json` shows them all. Machines you make with `bento smolvm` sit next to
+smolbento's sandboxes, but `bento ls` shows only the ones smolbento made.
 
 ## Secret values
 

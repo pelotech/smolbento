@@ -9,11 +9,10 @@ Doing so would mean shipping libkrun and signing our binary with Apple's hypervi
 bento ── clap CLI (mirrors sbx) ── sandbox logic ── Runner ──> smolvm ──> microVM
 ```
 
-The smolvm it drives is a release pinned in `smolvm.lock` (version and SHA-256 per platform, built
-into the binary). The real runner downloads it before its first smolvm process, so any command that
-runs smolvm gets it first, checks the checksum and unpacks it into
-`~/.smolbento/engine/<version>/`. Every call sets `SMOLVM_DATA_DIR=~/.smolbento`, so
-smolbento's machines and cache stay apart from a smolvm the user runs themselves.
+The smolvm it drives is the release pinned in `smolvm.lock` (version and SHA-256 per platform, built
+into the binary). The first command that runs smolvm downloads it, checks the checksum and unpacks
+it into `~/.smolbento/engine/<version>/`. Every call sets `SMOLVM_DATA_DIR=~/.smolbento`, so
+smolbento's machines stay apart from a smolvm you run yourself.
 
 All smolvm calls go through the `Runner` trait in `src/smolvm/`. The real runner parses smolvm's JSON
 output and errors. Tests swap in a fake runner and assert the exact smolvm command lines.
@@ -41,7 +40,7 @@ workspace to that user through an idmapped mount, so the agent can write it and 
 the host.
 
 **Start** runs `smolvm machine start`, then setup steps as root in the VM. Docker-enabled sandboxes get
-the shipped `docker` kit (`kits/docker/docker.yaml`, or `--kit docker` on any image), one `dockerd@1`
+the shipped `docker` kit (`--kit docker` on any image), a single `dockerd@1`
 request. smolbento starts `dockerd` on every start, before the startup steps (`src/sandbox/engine.rs`).
 Its data lives in the volumes `/var/lib/docker` and `/var/lib/containerd`, on the VM's own disk,
 since Docker's storage can't sit on an overlay.
@@ -65,6 +64,7 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/workspace/` | Workspace paths and mounts; `clone.rs` is clone mode on the host |
 | `src/config.rs` | Paths and settings |
 | `src/policy/` | Network rules, presets, compilation to smolvm flags |
+| `src/egress/` | Hosted egress: the per-sandbox `_serve egress` process that enforces network and request rules and swaps secrets |
 | `src/secrets/` | Secret sources, stores, resolution at start |
 | `src/kits/` | Kit files: load, resolve, compose the image, apply; registry pulls |
 | `src/env/` | `sbxenv.yaml` environment files |
@@ -76,5 +76,6 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/ssh_agent/` | SSH agent forwarding: grants, label, filtering proxy |
 | `src/ssh/` | The `~/.ssh/config` block `setup ssh` manages; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
+| `src/log.rs` | `SMOLBENTO_LOG` and `-D`: step spans and timings on stderr |
 
 Later phases are listed in [Development status](development-status.md).

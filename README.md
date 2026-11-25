@@ -9,8 +9,8 @@ seeing only a placeholder for the API key](https://github.com/pelotech/smolbento
 
 ## Why smolbento
 
-It keeps the commands and kits of Docker Sandboxes, and is open source, needs no account and runs
-no background process. Each command calls smolvm directly. See
+It keeps the commands and kits of Docker Sandboxes, is open source and needs no account. Each
+command calls smolvm directly. See
 [smolbento and Docker Sandboxes](docs/comparison.md) for how the two differ, and
 [sbx compatibility](docs/sbx-compatibility.md) for every command and flag.
 
@@ -22,7 +22,7 @@ no background process. Each command calls smolvm directly. See
  │  bento secret set anthropic ──▶ OS keychain, 1Password ref or a command             │
  │                                    │ read at each start; never written to disk      │
  │                                    ▼                                                │
- │  smolvm, outside the VM                                                             │
+ │  bento's egress process and smolvm, outside the VM                                  │
  │   ├─ network policy: allowed hosts only, everything else refused ──▶ the internet   │
  │   ├─ credential swap: placeholder ──▶ real key, only on HTTPS to that service       │
  │   └─ hypervisor                                                                     │
@@ -35,8 +35,8 @@ no background process. Each command calls smolvm directly. See
  ───────────────────────────────────────────────────────────────────────────────────────
 ```
 
-- **Secrets:** the agent holds a placeholder. smolvm puts the real value in only on HTTPS requests
-  to that service's hosts, so a leaked environment or prompt-injected `curl` gets nothing useful.
+- **Secrets:** the agent holds a placeholder. bento's egress process puts the real value in only on
+  HTTPS requests to that service's hosts, so a leaked environment or prompt-injected `curl` gets nothing useful.
 - **Network:** each sandbox gets a policy (`balanced`, `deny-all` or `allow-all`, plus your rules),
   enforced outside the VM. Blocked requests show in `bento policy log`.
 - **MicroVM:** a separate kernel per sandbox. The agent can be root inside without touching the
@@ -75,9 +75,8 @@ brew tap pelotech/tap && brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 
-That's all: smolvm is installed automatically. smolbento downloads the smolvm release it's tested
-with the first time you run it, into `~/.smolbento`, and checks its checksum. Docker isn't needed.
-On Linux, your user needs access to `/dev/kvm`.
+smolvm is downloaded on first run into `~/.smolbento` and checked against a built-in checksum.
+Docker isn't needed. On Linux, your user needs `/dev/kvm` access.
 
 From source or a release tarball, and how to uninstall: [Install](docs/install.md).
 

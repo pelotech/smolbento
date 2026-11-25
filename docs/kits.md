@@ -30,9 +30,8 @@ where the agent name goes, and the sandbox takes its name. Its image's command r
 `USER` (root if none) under `/bin/bash`, in the workspace path, and `bento exec` uses the same user.
 smolvm maps the workspace to that user. A workload with no `ENTRYPOINT` or `CMD` is refused, and one
 without `/bin/bash` can't start its agent. A v3 workload's `ENTRYPOINT` + `CMD` also run at every
-boot (as the image user), as the kit spec's default launch mode says, once that start's install
-steps, files, agent context and startup steps are done (an `sh` waits for them); the machine
-stays up if it exits, and `bento run` still starts its own interactive session.
+boot, as the image user, after that start's install steps, files, agent context and startup steps
+finish. If it exits, the machine stays up. `bento run` still starts its own session.
 
 | Reference | Kit |
 |---|---|
@@ -58,60 +57,50 @@ one line per problem. sbx's agent kits provide their own name (`claude@2.1.325`)
 `requires: [claude]` works on `claude`.
 
 `bento kit inspect REF` prints the kit's summary, capabilities, source, provides, requires,
-credentials (with the hosts each secret goes to) and arguments. `--format json` (or `--json`) and
-`--format yaml` print a v2-shaped descriptor with smolbento's extras under `smolbento`. `bento kit
-validate REF` prints `✓ REF — valid`, or the error and exits 1; with `--json` or `--format
-json|yaml` it prints `{reference, kind, valid, warnings}`, plus `errors` when invalid. `--offline`
-checks a local v2 kit or Smolfile without the network or source policy.
+credentials (with the hosts each secret goes to) and arguments. `bento kit validate REF` prints
+`✓ REF — valid`, or the error and exits 1. `--json` or `--format json|yaml` print machine-readable
+output (`inspect`: a v2-shaped descriptor with smolbento's extras under `smolbento`; `validate`:
+`{reference, kind, valid, warnings}`, plus `errors`). `--offline` checks a local v2 kit or Smolfile
+without the network or source policy.
 
 `--kit-arg NAME=VALUE` applies to every kit, `--kit-arg KIT.NAME=VALUE` to one, and `--kit-args-file
 FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last value wins, and a
 per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is ignored. Argument
-values aren't secret: they reach the environment and smolvm's machine config, and each kit's values
-(defaults included) are kept with the sandbox (its `sbx.kits` label, shown by
-`bento smolvm machine status`), in templates saved from it, and in their `--output` archives. Put secrets in
-[credentials](network-and-secrets.md#secrets). An argument with no value and no default fails with `create-phase kit arg
-"x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error.
-Unquoted numbers and booleans in `default:` and `enum:` are read as strings. A `pattern:` has to
-match the whole value, as if it were written `^(?:…)$`.
+values aren't secret: they reach the environment and smolvm's machine config, and are kept with the
+sandbox, in templates saved from it, and in `--output` archives. Put secrets in
+[credentials](network-and-secrets.md#secrets). An argument with no value and no default fails with
+`create-phase kit arg "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a
+kit is an error. Unquoted numbers and booleans in `default:` and `enum:` are read as strings. A
+`pattern:` has to match the whole value, as if it were written `^(?:…)$`.
 
 In a kit, `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}` are replaced, in any field of a
 capability's config and in its map keys. Any other `${{ … }}`, such as a GitHub Actions expression
-in a file the kit writes, is left as it is. A value that is nothing but one reference takes the type
-its value spells, so `container: ${{ kit.args.port }}` with `port=8080` is the number 8080.
-`true`/`false` become booleans, and a number does only when it prints back the same (`1.0`, `007`
-and `1e5` stay text). `volume@1`'s `size` and `mode` always stay text. A config with references is
-checked fully at create, after they're replaced. Two map keys that become the same key are an
-error.
+in a file the kit writes, is left as it is. A value that is only one reference takes the type its
+value spells: `container: ${{ kit.args.port }}` with `port=8080` is the number 8080. `true`/`false`
+become booleans, and a number does only when it prints back the same (`1.0`, `007` and `1e5` stay
+text). `volume@1`'s `size` and `mode` always stay text. A config with references is checked at
+create, after they're replaced. Two map keys that become the same key are an error.
 
 `${{ kit.env.NAME }}` reads the sandbox's environment as the spec defines it: the workload image's
-`ENV`, then what kits export (`args.*.env`), then `-e`/`--env` at create, the last winning; an empty
-`-e NAME=` is a value. `WORKSPACE` is smolbento's. `HOME` is the workload's: the image's `ENV HOME`,
-else its user's home, `/root` for root and `/home/agent` for `agent` (or a kit with no image). Any
-other user's home is only in the image's passwd file, read in the guest, so `${{ kit.env.HOME }}` is
-an error there unless the image sets `ENV HOME`. `kit add` reads only what kits export,
-since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
+`ENV`, then what kits export (`args.*.env`), then `-e`/`--env` at create, the last winning (an empty
+`-e NAME=` is a value). `WORKSPACE` is smolbento's. `HOME` is the image's `ENV HOME`, else `/root`
+for root and `/home/agent` for `agent` (or a kit with no image); for any other user it is an error
+unless the image sets `ENV HOME`. `kit add` sees only what kits export.
 
 What a kit does, and when:
 
 - On first start, install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),
   with network only for installing. One that names no user has the image user's `HOME`. After the
-  install steps, kit files and agent context, files root left in that home (smolbento's own steps,
-  such as bundled skills, included) are handed to the image user (and its group), so the agent
-  can write there; only when the user already owns the home, so a system account's `/` or `/bin`
-  is left alone. A failing step, or a kit file that can't be written, removes the sandbox. Fix the
-  cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
-  are the primary workspace. Without one, a sandbox works in its workload image's `WORKDIR`, or in
-  `/home/agent/workspace` when the image has none.
-- On every start, startup steps run in kit order, before the agent. A failing one is a warning
-  with the log's last lines, and the sandbox starts anyway, as in sbx 0.51. A `background: true`
-  step keeps running; if it fails, only the log records it. A step that doesn't finish holds up the
-  start; there is no timeout, as in sbx.
-- Logs go to `/var/log/sbx-kit-startup.log` in the sandbox. Each start adds a `=== dispatcher run …
-  ===` line, each finished step an `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` line, and a
-  failing step its output and exit code.
-- At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
-  runs.
+  install steps, kit files and agent context, files root left in that home (bundled skills included)
+  are handed to the image user (and its group) so the agent can write there. A failing step, or a
+  kit file that can't be written, removes the sandbox. Fix the cause and run the same command. In a
+  v2 kit, `files/workspace` and `${WORKDIR}` are the primary workspace. Without one, a sandbox works
+  in its workload image's `WORKDIR`, or in `/home/agent/workspace` when the image has none.
+- On every start, startup steps run in kit order, before the agent. A failing step is a warning with
+  the log's last lines, and the sandbox starts anyway (also at create and `kit add`). A
+  `background: true` step keeps running; if it fails, only the log records it. A step that doesn't
+  finish holds up the start; there is no timeout.
+- Logs go to `/var/log/sbx-kit-startup.log` in the sandbox.
 - Startup steps run as the session user (the workload image's user, else `agent`) unless they name a
   user, as the kit spec's `lifecycle@1/default-users` says; install steps run as root. A numeric user
   runs as the account with that uid. An image user with a group (`1000:1000`) runs as that user, in
@@ -119,7 +108,7 @@ What a kit does, and when:
 - A Docker engine comes from `dockerd@1`. The shipped `docker` kit is that one request and nothing
   else (the image must have Docker). A workload that asks for an engine
   (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets the `docker` kit even when its own
-  `provides` lists `docker`, as sbx's kits do. A kit providing `docker` no longer replaces it.
+  `provides` lists `docker`, as sbx's kits do.
 - `dockerd@1` makes the sandbox privileged and gives the engine its own volumes (`/var/lib/docker`,
   `/var/lib/containerd`). On every start smolbento starts `dockerd` before any startup step and waits
   up to 60 s for it to answer; if it doesn't, the start fails (see `/var/log/dockerd.log`). The
@@ -210,15 +199,14 @@ How the text gets there depends on the `agent-context` version the kits declare:
   Text a kit ships as a file (`contentFile`) is listed where the kit's image has it; inline text is
   written to `kits-agent-context/<kit>.md`.
 
-A sandbox uses one version for all its kits, as the kit spec requires. It is `@2`, unless a kit
-requires `@1` (declares it without `optional: true`). A kit can offer both by declaring each with
-`optional: true`, as the shipped kits and sbx's agents do; it then follows the others. A kit that
-offers only the version not in use, as optional, is added without its instructions
-(`kit.showWarnings` shows a warning). Kits that require different versions can't share a sandbox,
-and `create` says which. `kit add` keeps to the sandbox's version: a kit that requires the other
-one needs a recreate.
+A sandbox uses one `agent-context` version for all kits: `@2`, unless a kit requires `@1` (declares
+it without `optional: true`). Kits that require different versions can't share a sandbox, and
+`create` says which. A kit that offers only the other version, as optional, is added without its
+instructions (`kit.showWarnings` shows a warning). `kit add` keeps the sandbox's version; a kit that
+requires the other one needs a recreate. Declaring both versions with `optional: true` makes a kit
+follow the others, as the shipped kits and sbx's agents do.
 
-Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no platform preamble.
+Text outside the markers is yours and is kept.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
   a warning. When only `kits-agent-context` would, a kit with listed text is refused: the spec
@@ -230,18 +218,32 @@ Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no p
 - A kit can't end the section: a `<!-- sbx:` marker in kit text is written as `&lt;!-- sbx:`.
 - `kit add` puts the new kit's text after what the section holds. If an add fails partway and you
   run it again, that kit's inline `@2` text is there twice; remove one copy by hand.
-- Files are owned by `agent`, except a file the image already has owned by root, which keeps its
-  owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
   show up as untracked.
 
 ### Adding a kit to a sandbox
 
-`bento kit add SANDBOX REF` applies a mixin to an existing sandbox without restarting it; a stopped
-sandbox is started for it. A kit that changes the image, credentials, ports, volumes, host mounts,
-agent skills, the SSH agent, resources, environment variables (an exported argument included) or
-auto-stop needs a new sandbox. `kit add` then says `recreate required` and changes nothing. A kit that opens network access asks first; `-y` grants it, and without a terminal
-it fails.
+`bento kit add SANDBOX REF` applies a mixin to an existing sandbox without a restart (a stopped
+sandbox is started). A kit that changes the image, credentials, ports, volumes, host mounts, agent
+skills, the SSH agent, resources, environment variables (an exported argument included) or auto-stop
+needs a new sandbox: `kit add` says `recreate required` and changes nothing. A kit that opens
+network access asks first; `-y` grants it, and without a terminal it fails.
+
+### SSH agent grant
+
+A kit asks for your SSH agent with `ssh-agent@1`: `phase: install`, `runtime` or both, and
+`sign: [git, …]` to allow only those namespaces. A v3 workload kit gets no agent without it. A
+required grant with no agent stops the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH
+agent, but SSH_AUTH_SOCK is unset`); an optional one is left out with a note. An `install` grant is
+served only during install steps, and a step sees `SSH_AUTH_SOCK` only if it lists it in `env`.
+Without a `runtime` grant, the guest's `/run/ssh-agent.sock` is removed once the install steps
+finish, and at every later start.
+
+`authenticate: [host | user@host]` (with `unrestricted: false`) allows logins to those servers only.
+A login is signed only after smolbento verifies a session binding (OpenSSH 8.9+) against a host key
+that `ssh.knownHostsFile` (default `~/.ssh/known_hosts`) lists for the named server, and the named
+user if the entry has one. The file is read at each login, never from the sandbox. Log in once from
+your own shell first to record the key. Entries merge per phase like `sign`.
 
 ### Kit host mounts
 
@@ -273,11 +275,10 @@ sandbox still mounts. `reset` deletes them with the rest of smolbento's data.
 
 Local v3 kits build with BuildKit in a hidden sandbox, `_builder`, so Docker isn't needed on your
 machine. It's created on first use, stopped after each build, hidden from `bento ls`, and keeps the
-build cache; `bento rm _builder` resets it (`rm --all` and `prune` leave it). Each build starts its `dockerd` if it isn't running, so a
-builder left without Docker (an interrupted first start, say) recovers without losing that cache.
-Builds use your global network policy (`bento policy log
-_builder` shows blocks) and never get your secrets. An image that needs a login (Docker's examples
-use `dhi.io`) needs a [registry credential](network-and-secrets.md#registry-credentials).
+build cache; `bento rm _builder` resets it (`rm --all` and `prune` leave it). Builds use your global
+network policy (`bento policy log _builder` shows blocks) and never get your secrets. An image that
+needs a login (Docker's examples use `dhi.io`) needs a [registry
+credential](network-and-secrets.md#registry-credentials).
 
 ## Skills
 
@@ -360,11 +361,10 @@ new session after a change.
 | `opencode` | `~/.config/opencode/skills` |
 | `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
 
-`~` is `/home/agent`. Links are
-made as root at each start, owned by the image's `agent` account (uid 1000 without one), as is
-any directory made for a link or bind (such as `~/.claude`). A skills
-directory reached through a symlink gets no links, and a required bundled skill for it fails the
-create. If linking fails, the start warns (`couldn't set up shared skills`) and goes on.
+`~` is `/home/agent`. Links and any directory made for them are owned by the image's `agent`
+account (uid 1000 without one). A skills directory reached through a symlink gets no links, and a
+required bundled skill for it fails the create. If linking fails, the start warns (`couldn't set up
+shared skills`) and goes on.
 
 ### Skills from kits
 
@@ -381,16 +381,13 @@ create. If linking fails, the start warns (`couldn't set up shared skills`) and 
   file and no skill of that name exists, then links it into every skills directory. A required
   bundled skill that fails either check, or has nowhere to go, fails the create and removes the
   sandbox. An optional one prints `warning: skipping skill NAME: reason` and the sandbox starts
-  without it. A name that matches a stored skill is a conflict: the store link comes first, and a
-  required bundled skill is refused before the sandbox is made.
-  smolbento links bundled skills and never runs them.
-- With bundled skills, no skills directory is mounted over, since that would put the kit's skills in
-  your store. Every directory instead links into `/run/sbx/skills-shared`. That mount is read-write
-  if any directory's access is, else read-only, with or without bundled skills. With `off`, the directories hold only the
-  bundled skills.
-- A required bundled skill named like a stored skill fails the create with `failed to compose shared skills
-  into the sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the
-  name`.
+  without it. smolbento links bundled skills and never runs them.
+- With bundled skills no skills directory is mounted over (that would put the kit's skills in your
+  store); every directory links into `/run/sbx/skills-shared` instead. With `off`, the directories
+  hold only the bundled skills.
+- A bundled skill named like a stored skill is a conflict: the store link comes first. A required
+  one fails the create before the sandbox is made, with `failed to compose shared skills into the
+  sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the name`.
 - `kit add` refuses kits with either capability, since mounts are set at create. Create a new
   sandbox with the kit.
 
@@ -426,14 +423,11 @@ Limits:
 
 - Only the `claude` agent so far. Other agents fail the create with an error.
 - OAuth isn't supported. A server that only offers OAuth login can't take a token header.
-- A header secret needs an `https://` URL with a host name and no port. A server can have one header
-  with a secret.
-- URLs with credentials (`https://user:pass@host/`) are refused. URLs are stored as given, so keep
-  secrets out of query strings.
-- `localhost` URLs are refused: inside a sandbox, that means the sandbox itself.
+- A header secret needs an `https://` URL with a host name and no port, and a server can have one
+  such header. URLs with credentials (`https://user:pass@host/`) and `localhost` URLs (inside a
+  sandbox, that means the sandbox itself) are refused. URLs are stored as given, so keep secrets out
+  of query strings.
 - `bento template save` refuses a sandbox created with `--static-mcp`.
-- You can edit `mcp.toml` by hand; a selected server is checked as `mcp add` checks it, before
-  anything is created.
 - `mcp auth`, `mcp load` and `mcp unload` aren't supported ([sbx
   compatibility](sbx-compatibility.md#mcp-servers)).
 
@@ -462,9 +456,8 @@ bento template load myimage.tar
   image. `--pull never` works only with a saved template whose kits are in the kit cache.
 - The agent must match: a `claude` template can't start a `codex` sandbox.
 - `/tmp` and the workspace (mounted, not on the disk) aren't kept.
-- A template keeps the sandbox's kits (pinned) and their args (not secret: they're in exported
-  archives too). A create from it loads them again and
-  reruns their install and startup steps, under the same kit settings as any create:
+- A template keeps the sandbox's kits (pinned) and their args (not secret). A create from it loads
+  them again and reruns their install and startup steps, under the same kit settings as any create:
   `kit.allowedSources`, `kit.allowLocalKits`, and `kit.requireSignature` (which needs the registry,
   even with `--pull never`). With `docker.enabled=false` the docker kit is left out. A sandbox made
   from a template can't be saved yet.
@@ -472,5 +465,4 @@ bento template load myimage.tar
   A create from a template runs the command its source sandbox ran.
 - `-t` can't combine with `--kit` kits that add image layers, since the disk is saved whole.
   Layer-free kits such as `docker` work.
-- Removing a template doesn't affect sandboxes made from it. Kit install steps run again for each
-  new sandbox.
+- Removing a template doesn't affect sandboxes made from it.

@@ -22,15 +22,12 @@ $ grep close bento.log
 …
 ```
 
-The log and `-D` name flags, variables and hosts, never secret or environment values: smolvm gets
-those in its environment, which isn't shown. `-e` values, long arguments (scripts, labels) and a
-guest command's arguments are left out (`-- gh (+3 args)`). `h2`, `hyper`, `reqwest` and `rustls`
-stay at `info` unless the filter names them, or a span directive such as `[kit_load]=trace` lifts
-everything inside that span.
+The log and `-D` show flags, variable names and hosts, never secret or environment values. `-e`
+values, long arguments (scripts, labels) and a guest command's arguments are left out
+(`-- gh (+3 args)`).
 
-`SMOLBENTO_LOG` doesn't reach a hosted sandbox's egress process, so changing it never restarts one.
-That process keeps logging startup errors and denied connections to its `egress.log` (see [Network
-and secrets](network-and-secrets.md)). `SMOLBENTO_LOG` is smolbento's own; sbx has no counterpart.
+`SMOLBENTO_LOG` doesn't reach a hosted sandbox's egress process. That process logs startup errors
+and denied connections to its `egress.log` (see [Network and secrets](network-and-secrets.md)).
 
 ## `downloading smolvm from … failed`
 
@@ -71,9 +68,10 @@ Only sandboxes with a disk larger than 20 GiB need it: `brew install e2fsprogs`.
 
 ## `don't run bento as root`
 
-Cause: smolvm maps the workspace to the agent only for a normal user's workspace.
+Cause: smolvm can't map a root-owned workspace to the agent user.
 
-Run `bento` as your normal user. On Linux, grant that user `/dev/kvm` access instead of using `sudo`.
+Run `bento` as your normal user. On Linux, grant that user `/dev/kvm` access (see below) instead of
+using `sudo`.
 
 ## `diagnose` says `FAIL /dev/kvm` (Linux)
 
@@ -108,10 +106,8 @@ bento settings unset KEY
 
 ## `Permission denied` writing the workspace
 
-Cause: the sandbox was created by an older smolbento, or the workspace is owned by root.
-
-- Recreate sandboxes made by an older smolbento (see [Install](install.md#upgrading)).
-- Make sure the workspace isn't owned by root.
+Cause: the workspace is owned by root, or the sandbox was made by an older smolbento. Change the
+owner, or recreate the sandbox ([Install](install.md#upgrading)).
 
 A custom `-t` image must have an `agent` user, or the sandbox won't start.
 

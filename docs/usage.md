@@ -38,8 +38,8 @@ error: sandbox name "claude-infrastructure" is already used by workspace "/src/p
 `bento settings set sandbox.autoName true` takes the suggested name instead of refusing. Either way, a
 later `bento run claude` in that directory finds its sandbox by the directory, whatever it's called.
 
-When the last attached session exits (closing the terminal counts), the sandbox stops. Its disk is
-kept, so the next `run` resumes with what the agent installed.
+When the last attached session exits, the sandbox stops. Its disk is kept, so the next `run`
+resumes where the agent left off. `create` makes a sandbox that runs until you stop it.
 
 | Form | Effect |
 |---|---|
@@ -75,9 +75,9 @@ An agent kit's subscription login (`claude`'s claude.ai account) happens inside 
 its tokens stay there: smolvm can't yet swap them for placeholders as sbx does. With an API key
 set (`bento secret set anthropic`), the key stays on the host and the agent uses it.
 
-`gemini` is retired, as in sbx 0.53, and a new sandbox can't use it. Use the `antigravity` kit (`bento
-create docker.io/sbx/antigravity:latest .`) or `docker.io/sbx/gemini-kit:latest`, which keeps Gemini
-CLI running. In an environment file, keep `agent: gemini` and add the gemini kit to `kits:`.
+`gemini` is retired (as in sbx 0.53) for new sandboxes. Use the `antigravity` kit (`bento create
+docker.io/sbx/antigravity:latest .`) or `docker.io/sbx/gemini-kit:latest`. In an environment file,
+keep `agent: gemini` and add the gemini kit to `kits:`.
 
 ## Create without attaching
 
@@ -88,41 +88,15 @@ bento create claude .
 bento create shell
 ```
 
-A sandbox made by `create` runs until you stop it.
+`run` and `create` print their steps (SANDBOX, KITS when a kit was pulled or built, IMAGE, SETUP),
+then `Created sandbox NAME`; `create` adds `try: bento run --name NAME`. On a terminal each step
+redraws with a spinner and a pull percentage. Without one, each step prints a line when it starts
+and when it ends. An image smolvm has cached doesn't pull (see
+[`smolvm.image-cache-size`](configuration.md#settings)).
 
-`run` and `create` print their steps (SANDBOX, KITS when a kit was pulled or built, IMAGE, SETUP)
-and then `Created sandbox NAME`. `create` adds `try: bento run --name NAME`. `start` prints `○ NAME —
-starting…`, then `✓ Started NAME`. Without a terminal, each step prints a line when it starts and
-another when it ends:
-
-```
-SANDBOX
-  Name:       shell-proj
-  Agent:      shell
-  Workspace:  -
-  Image:      from docker.io/sbx/shell:latest
-  CPU:        3
-  Memory:     1536 MiB
-
-IMAGE
-  ○ image — preparing…
-  ✓ image — ready
-
-SETUP
-  ○ sandbox — starting…
-  ✓ sandbox — started
-
-  ✓ Created sandbox shell-proj
-        try: bento run --name shell-proj
-```
-
-On a terminal, each step redraws in place with a spinner, and a pull shows its percentage (`⠙ image
-— pulling… 42%`). The image step says `preparing` until smolvm reports a pull; an image smolvm has
-cached doesn't pull (see [`smolvm.image-cache-size`](configuration.md#settings)).
-
-Progress goes to stdout. Scripts that capture output (`name=$(bento run -d …)`) pass `--no-progress`,
-which also hides the `Created` and `try:` lines. `--no-input`, on any command, never prompts: a
-command that would ask fails with the flag or command to use instead. `run -d --no-progress` then prints only the name.
+Scripts that capture output (`name=$(bento run -d …)`) pass `--no-progress`, which also hides the
+`Created` and `try:` lines, so `run -d --no-progress` prints only the name. `--no-input`, on any
+command, never prompts: a command that would ask fails and names the flag to use.
 
 | Option | Meaning |
 |---|---|
@@ -153,20 +127,6 @@ The agent works on a clone of your repo. Your checkout is mounted read-only at
 `/run/sandbox/source`, and on first start it's cloned to the same path on the sandbox's own disk.
 The clone survives stop and start and is writable, so `:ro` on a `--clone` workspace is ignored.
 
-The clone starts from your repo's `HEAD` (for a linked worktree, its branch, or its commit when
-detached). If that checkout fails, it starts from the source repo's default `HEAD` with a warning.
-Uncommitted changes aren't carried over.
-
-Remotes (`origin`, `upstream`, …) are copied, except local-path and `file://` ones. User names and
-tokens in HTTPS URLs are left out. SSH remotes are copied but have no keys in the sandbox, so for
-pushes use an HTTPS remote with `bento secret set github`. The copy is redone on every start. Remotes
-you add or change reach the clone then, and a remote the agent changed is reset to your URL.
-
-The agent can read your whole `.git` at `/run/sandbox/source`, including tokens in remote URLs and
-`http.extraHeader` (see [sbx compatibility](sbx-compatibility.md)). Keep credentials out of it. Use
-a credential helper on your machine, or `bento secret`. `create --clone` warns about a token in a
-remote URL.
-
 The agent's commits come back through a remote named `sandbox-<name>`. Only branches come back; tags
 stay in the sandbox (`--no-tags`).
 
@@ -177,19 +137,30 @@ git log sandbox-claude-myrepo/main
 git merge sandbox-claude-myrepo/main
 ```
 
+The clone starts from your repo's `HEAD` (for a linked worktree, its branch, or its commit when
+detached). If that checkout fails, it starts from the source repo's default `HEAD` with a warning.
+Uncommitted changes aren't carried over.
+
+Remotes are copied on every start, except local-path and `file://` ones, and HTTPS user names and
+tokens are left out. SSH remotes have no keys in the sandbox, so push over HTTPS with `bento secret
+set github`. A remote the agent changed is reset to your URL.
+
+The agent can read your whole `.git` at `/run/sandbox/source`, including tokens in remote URLs and
+`http.extraHeader` (see [sbx compatibility](sbx-compatibility.md)). Keep credentials out of it. Use
+a credential helper on your machine, or `bento secret`. `create --clone` warns about a token in a
+remote URL.
+
 - `run` fetches `sandbox-<name>` on exit and prints git's summary. Turn it off with `bento settings
   set clone.fetch-on-exit false`. A failed fetch only warns. The automatic fetch checks objects
   (`fetch.fsckObjects`) and doesn't recurse into submodules.
 - Any fetch from a stopped clone sandbox starts it, fetches, and stops it again. That includes `git
-  fetch --all`, `git remote update` and an IDE's background fetch.
-- A `git fetch` that overlaps a `run` exiting can leave the sandbox running. `bento stop <name>` stops
-  it.
+  fetch --all`, `git remote update` and an IDE's background fetch. If a fetch overlaps a `run` exit
+  and leaves the sandbox running, `bento stop <name>` stops it.
 - `git fetch` runs `smolbento _upload-pack <name>`, so `smolbento` must be on your `PATH`.
 - `--clone` needs a workspace in a git repository and git 2.31 or newer on your machine. The image
   needs git too; the built-in images have it, and with `-t` pick one that does. A failed clone fails
   the start with git's error, and the sandbox from a failed first start is removed. Fix the cause
   and rerun `create` or `run`.
-- `--clone` applies only at create.
 - `bento rm`, `prune` and `reset` remove the `sandbox-<name>` remote and its branches. To keep a
   branch: `git branch keep sandbox-<name>/main`.
 - `run --rm` keeps the remote, so fetched commits survive; later fetches fail. Remove it with `git
@@ -223,14 +194,12 @@ Use forks for parallel attempts or as an undo point. Fork before risky work, and
 - `bento rm` of a sandbox with forks fails unless the forks go in the same command. `prune` and
   `reset` remove forks first; `prune` keeps a stopped sandbox while it has forks.
 - `bento ls --json` shows `fork_of`. Published ports get new host ports; see `bento ports <fork>`.
-- smolvm limits how deep copies can chain, and `fork` says so.
-- Sandboxes started before fork support, or while `fork.enabled` was off, need one restart (`bento
-  stop NAME && bento start NAME`) first.
+- A sandbox started while `fork.enabled` was off needs one restart (`bento stop NAME && bento start
+  NAME`) first.
 
-Clone and mountless sandboxes start branchable. That costs idle memory that smolvm doesn't return to
-your machine, and it carries a Linux secret-exposure risk (see [Security](SECURITY.md)). If you
-don't use fork, turn it off with `bento settings set fork.enabled false`; it applies from each
-sandbox's next start.
+If you don't use fork, run `bento settings set fork.enabled false` (applies from each sandbox's next
+start). Clone and mountless sandboxes otherwise start branchable, which holds idle memory that smolvm
+doesn't return to your machine and carries a Linux secret-exposure risk ([Security](SECURITY.md)).
 
 ## Run commands inside
 
@@ -245,12 +214,10 @@ bento exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `exec` starts a stopped sandbox first and runs as `agent` in the workspace, unless you pass `-u` or
 `-w`. `--privileged` runs as root. It exits with the command's status.
 
-The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_ID` (a UUID, new
-per sandbox and per fork, kept across restarts), `WORKSPACE_DIR`, `IS_SANDBOX=1`, `SANDBOX_VM_ID`
-(the name), `SBX_AGENT`, and `SBX_CRED_<SERVICE>_MODE` for each service a kit declares a
-credential for (`apikey` if that secret was set at create, else `none`; `claude` has `ANTHROPIC`),
-except an inject-only one. Your `-e` wins, except for the first four: the sandbox sets those.
-Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
+The agent and every `exec` see the sbx sandbox variables (`SANDBOX_NAME`, `SANDBOX_ID`,
+`WORKSPACE_DIR`, `IS_SANDBOX=1`, `SANDBOX_VM_ID`, `SBX_AGENT`, and `SBX_CRED_<SERVICE>_MODE` per kit
+credential service). Your `-e` wins, except for the first four, which the sandbox sets. Value rules
+and differences from sbx: [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
 ## SSH into a sandbox
 
@@ -267,26 +234,43 @@ bento setup ssh remove
 ```
 
 `ssh NAME.sbx` starts a stopped sandbox, and fails for one that doesn't exist (create it first). It
-runs as the sandbox's session user (`agent`) in the workspace, like `exec`. There is nothing to
-install in the sandbox and no key or password: `ssh` runs `bento ssh proxy`, which speaks SSH for that
-one connection, so only you can use it.
+runs as the sandbox's session user (`agent`) in the workspace, like `exec`. Nothing is installed in
+the sandbox and there is no key or password: `ssh` runs `bento ssh proxy` for that one connection, so
+only you can use it.
 
-VS Code Remote-SSH works with `ssh NAME.sbx` as the host: it installs its server through exec, then
-forwards ports (the sandbox needs network access to download it, per your policy). It isn't
-tested here, as VS Code can't be scripted.
+VS Code Remote-SSH can use `ssh NAME.sbx` as the host. The sandbox needs network access (per your
+policy) to download VS Code's server. This is untested.
 
 Port forwarding (`ssh -L`) reaches `localhost`, `127.0.0.0/8` and `::1` inside the sandbox only. The
 sandbox needs `nc` or bash. SFTP and `scp`, agent forwarding, X11 and remote forwarding (`-R`) are
 refused; use `bento cp` for files. `setup ssh` never edits anything outside its own block (put at the
 top of `~/.ssh/config`). See [sbx compatibility](sbx-compatibility.md#ssh).
 
+### Host services
+
+On macOS (launchd) and Linux (`systemd --user`), a unit per sandbox owns the sockets for the browser,
+clipboard and SSH agent, so they work whenever the sandbox runs, attached or not. The unit runs
+`bento _serve KIND NAME` for each connection. Each connection re-reads settings, so a new `bento`
+binary or `PATH` is picked up when a command rewrites the unit.
+
+- Without a usable service manager (a container, CI without a user session), a socket is served only
+  while `bento run` or `bento exec` is attached. The first attached session serves it.
+- Units are written at create. After a reboot, `create`, `start`, `run` or `exec` load them again.
+  `bento rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets.
+- macOS units live in `~/Library/Application Support/smolbento/launchd`, Linux units in
+  `~/.config/systemd/user`. They exist only for sandboxes with the bridge or an agent grant.
+- The socket directory must be private and yours (0700), checked at create and at start (macOS:
+  `~/Library/Application Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only
+  serving: `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
+- Units of a sandbox deleted with `bento smolvm machine delete` are removed by the next `create`,
+  `start`, `run`, `exec`, `rm` or `prune` (never by `ls`). `prune --dry-run` lists them (`Would
+  remove NAME (leftover host services)`), `prune` removes them without asking, and `diagnose`
+  reports them.
+
 ## Browser and clipboard
 
 The sandbox can open URLs in your browser and, once you allow it, copy text to your clipboard,
-whenever it runs. On
-macOS (launchd) and Linux (`systemd --user`) a service unit owns the socket, so nothing needs to be
-attached; without a usable service manager (a container, CI without a user session) it works only
-while `bento run` or `bento exec -it` is attached.
+whenever it runs. Both use [host services](#host-services).
 
 ```sh
 # inside the sandbox
@@ -303,31 +287,17 @@ git diff | wl-copy
   be pasted. A copy that's off, or made when nothing serves the socket, fails with `<command>:
   failed to write host clipboard (copying may be off: …)`.
 - Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
-  `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (the
-  connection's process stays that long) and relays the callback. If something else answers that
-  port, it warns and still opens the URL. A session relays at most 4 ports, and a sandbox's
-  sessions keep at most 4 such processes alive. On Linux `bento rm` stops them with the
-  sandbox's units. A callback with a body
-  (`response_mode=form_post`) loses it; query-string redirects work.
+  `http://127.0.0.1:PORT/…`, bento listens on your `127.0.0.1:PORT` for 10 minutes and relays the
+  callback. If another program holds that port, it warns and still opens the URL. At most 4 ports
+  per session. A callback with a body (`response_mode=form_post`) loses it; query-string redirects
+  work.
 - Over SSH without a forwarded display (Linux: no `DISPLAY` or `WAYLAND_DISPLAY`; macOS: always over
   SSH), URLs are printed instead.
 - `bento settings set browser.enabled false` stops URL opening and the login relay. Copying still
   works.
-- The shims go in `/usr/local/bin` on every start and need `curl` in the image. `BROWSER` is
-  `xdg-open`, so agents such as Claude Code's `/login` open the browser.
-- The unit runs `bento _serve bridge NAME` for each connection, with the settings and `PATH` of the
-  last `bento` that touched the sandbox (`create`, `start`, `run`, `exec` rewrite a unit that
-  differs, so an upgraded binary or a new `PATH` follows). Units are written at create. Without a
-  service manager, it is served only while attached (the first attached session serves it).
-- The socket directory must be
-  private and yours (0700), checked at create and at start (macOS: `~/Library/Application
-  Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only serving:
-  `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
-- Forks don't install the shims or get units, but keep the parent's socket mount, so they can use
-  the parent's bridge while the parent's unit (or attached session) serves it.
-- `bento rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets. Units of a sandbox
-  deleted with `bento smolvm machine delete` are removed by the next `create`, `start`, `run`, `exec`,
-  `rm` or `prune` (never by `ls`); `prune --dry-run` lists them and `diagnose` reports them.
+- The shims need `curl` in the image. `BROWSER` is `xdg-open`, so agents such as Claude Code's
+  `/login` open the browser.
+- Forks don't get units or shims; they use the parent's bridge while the parent is served.
 
 ## SSH agent
 
@@ -348,36 +318,17 @@ ssh-add -D
   none, or with `ssh.agentForwardingEnabled` set to `false`, the sandbox is created without one,
   silently.
 - Only listing keys and signing get through. Adding, removing or locking keys fails.
-- With a service manager (launchd on macOS, `systemd --user` on Linux) a unit owns the sandbox's
-  agent socket and runs `bento _serve agent NAME` for each connection, so the agent answers whenever
-  the sandbox runs, attached or not, across stop and start. The unit uses `ssh.agentSocketPath`,
-  else the `SSH_AUTH_SOCK` of the user session (launchd supplies macOS's; on Linux the unit gets
-  that of the last `bento` that wrote it). Without a service manager, it is served only while `bento` runs for the sandbox (`run`, `exec -it`, plain `exec`; the
-  first `bento` to start serves it). A socket path of 104 bytes or more (a very long home
-  directory) also means no units.
-- Units live in `~/Library/Application Support/smolbento/launchd` (`dev.smolbento.<id>.<sandbox>.agent.plist`; not in `~/Library/LaunchAgents`, which makes macOS announce a background item per sandbox, and not persistent: they're loaded again when `create`, `start`, `run` or `exec` find them unloaded after a reboot) or
-  `~/.config/systemd/user` (`smolbento-<id>-<sandbox>-agent.socket`), named with a short hash of
-  smolbento's data dir; they exist only for sandboxes with a runtime grant or the bridge, and go with
-  the sandbox (see [Browser and clipboard](#browser-and-clipboard)). The socket is `0600` in a
-  private directory of yours.
+- The agent socket is owned by a host service ([Host services](#host-services)), so the agent
+  answers whenever the sandbox runs, attached or not, across stop and start. The unit uses
+  `ssh.agentSocketPath`, else the `SSH_AUTH_SOCK` of the user session (launchd supplies macOS's; on
+  Linux the unit gets that of the last `bento` that wrote it). A socket path of 104 bytes or more (a
+  very long home directory) disables units. The socket is `0600` in a private directory of yours.
 - Each connection re-reads settings. `bento settings set ssh.agentForwardingEnabled false` refuses new
   connections at once; open ones stay. A changed `ssh.agentSocketPath` applies to new connections.
-- Kits request it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
-  allow only those namespaces. A v3 workload kit gets no agent without it. A required grant with no
-  agent stops the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an
-  optional one is left out with a note. An `install` grant is served only during install steps, and
-  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`. Without a `runtime` grant, the guest's
-  `/run/ssh-agent.sock` is removed once the install steps finish, and at every later start.
-- `authenticate: [host | user@host]` (with `unrestricted: false`) allows logins to those servers
-  and nothing else. A login is signed only when the same connection first sent a session binding
-  (OpenSSH 8.9+ does) that smolbento verified, for that login's session, with a host key your
-  `known_hosts` lists for a named server (and the named user, if the entry has one). Host keys come
-  from `ssh.knownHostsFile` (default `~/.ssh/known_hosts`), read at each login, never from the
-  sandbox; log in once from your own shell, or add the key, first. Entries merge per phase like
-  `sign`.
+- Kits request the agent with `ssh-agent@1` (phase, `sign` namespaces, `authenticate` hosts). See
+  [SSH agent grant](kits.md#ssh-agent-grant).
 - The grant is fixed at create.
-- Forks keep the parent's socket mount, so they can use the parent's grant while the parent is
-  served.
+- Forks use the parent's grant while the parent is served.
 
 ## Docker inside a sandbox
 
@@ -387,10 +338,9 @@ without touching your host's Docker. Its storage lives on the sandbox's disk and
 To skip Docker (smaller images, faster first pull), run `bento settings set docker.enabled false`
 before creating sandboxes; agents then use the plain image variants.
 
-The engine comes from the shipped `docker` kit ([Kits](kits.md#kits)). Docker-enabled images get it
-automatically; add it to another image that has Docker with `--kit docker`. dockerd starts on every
-start, before kit startup steps, and logs to `/var/log/dockerd.log`; a start fails if it doesn't
-answer within 60 s.
+The engine comes from the shipped `docker` kit. Docker-enabled images get it automatically; add it
+to another image that has Docker with `--kit docker`. How the engine starts, and when a start fails,
+is in [Kits](kits.md#kits).
 
 ## Files and ownership
 
@@ -463,8 +413,7 @@ bento prune --dry-run --filter until=24h
 bento reset -f
 ```
 
-`prune --dry-run` also lists host service units left by sandboxes deleted with `bento smolvm
-machine delete` (`Would remove NAME (leftover host services)`), and `prune` removes them without asking.
+`prune` also removes leftover host services ([Host services](#host-services)).
 `rm --all` and `prune` leave sandboxes of another bento setup sharing the same `smolvm.home` (another
 config or data directory) and the kit builder; naming one removes it.
 
