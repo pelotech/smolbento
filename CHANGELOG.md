@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.41.4](https://github.com/pelotech/smolbento/compare/v0.41.3...v0.41.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* **egress:** count relayed WebSockets against the session cap ([#289](https://github.com/pelotech/smolbento/issues/289)) ([2711da5](https://github.com/pelotech/smolbento/commit/2711da58d394cf34f23bdfe81230cd2c410052c4))
+* **smolvm:** run smolvm 1.37.7 ([#291](https://github.com/pelotech/smolbento/issues/291)) ([56f085d](https://github.com/pelotech/smolbento/commit/56f085df81397368ce9126d9006c459847bd3f6f))
+
+
+### Refactors
+
+* **egress:** tell the interceptor only the ruled hosts to decrypt ([#292](https://github.com/pelotech/smolbento/issues/292)) ([9618f27](https://github.com/pelotech/smolbento/commit/9618f27075e517eaada82a27bfd4f0b18697e0ad))
+
 ## [0.41.3](https://github.com/pelotech/smolbento/compare/v0.41.2...v0.41.3) (2026-11-26)
 
 
