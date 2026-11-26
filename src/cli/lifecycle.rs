@@ -121,7 +121,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             continue;
         }
         let start_plan = provision::start_plan(ctx, &sb.meta)?;
-        provision::restart_egress(ctx, &sb);
+        provision::before_start(ctx, &sb);
         let mut step = p.step(n, "starting");
         let started = sandbox::start(&ctx.vm, &sb, &start_plan, &mut |e| {
             if let Event::Pull(pull) = e {
@@ -135,6 +135,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
                 return Err(e);
             }
         }
+        provision::print_egress_warnings(ctx, n);
     }
     Ok(0)
 }

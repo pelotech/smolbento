@@ -1654,3 +1654,18 @@ fn reset_removes_the_skills_store() {
     t.sbt(&["reset", "-f"]).unwrap();
     assert!(!store.exists() && !t.ctx.paths.skills_metadata().exists());
 }
+
+#[test]
+fn start_clears_a_stale_unresolved_secrets_list() {
+    // The egress process writes a new one; an old one would warn about secrets that resolve now.
+    let mut t = test_env(&[]);
+    t.runner().ok(
+        &["machine", "status"],
+        &json("sbx-claude-proj", "stopped", "claude-proj"),
+    );
+    let stale = crate::egress::unresolved_file(&t.ctx.paths, "claude-proj");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, "GITHUB_TOKEN\n").unwrap();
+    t.sbt(&["start", "claude-proj"]).unwrap();
+    assert!(!stale.exists(), "{}", stale.display());
+}
