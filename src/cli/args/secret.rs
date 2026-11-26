@@ -48,6 +48,7 @@ pub struct SecretSetArgs {
     pub service: Option<String>,
     #[command(flatten)]
     pub source: SecretSource,
+    // Accepted as sbx does, and never read: `secret set` doesn't ask before overwriting.
     /// Overwrite an existing secret without confirmation
     #[arg(short = 'f', long)]
     pub force: bool,

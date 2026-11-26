@@ -126,10 +126,7 @@ impl Store {
     }
 
     fn ensure(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
-        std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
-        Ok(())
+        crate::util::create_private_dir(&self.dir)
     }
 
     /// Held around each change to the index and the packs it names (`config::lock`): beside

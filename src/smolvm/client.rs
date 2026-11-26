@@ -441,15 +441,7 @@ impl<R: Runner> Smolvm<R> {
 
     /// Sets one label; works running or stopped.
     pub fn set_label(&self, name: &str, key: &str, value: &str) -> Result<()> {
-        self.call(args(&[
-            "machine",
-            "update",
-            "-n",
-            name,
-            "--label",
-            &format!("{key}={value}"),
-        ]))?;
-        Ok(())
+        self.set_labels(name, &[(key, value.to_string())])
     }
 
     /// Sets several labels in one update, so they change together; running or stopped.

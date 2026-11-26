@@ -396,7 +396,11 @@ fn approve<R: Runner>(
     }
     if !ctx.can_prompt() {
         // The command as given, quoted for the shell, with `--force` added (sbx does the same).
-        let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
+        let words: Vec<String> = ctx
+            .args
+            .iter()
+            .map(|a| crate::util::shell_word(a))
+            .collect();
         let file = match loaded.files.as_slice() {
             [one] => one.display().to_string(),
             all => {
@@ -425,16 +429,6 @@ fn approve<R: Runner>(
         bail!("aborted");
     }
     approval::save(&ctx.paths, name, &loaded.files, &plan.resources, ctx.now)
-}
-
-/// `s` as one shell word: as is when that's safe, else single-quoted.
-fn shell_word(s: &str) -> String {
-    let plain = |c: char| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c);
-    if !s.is_empty() && s.chars().all(plain) {
-        s.to_string()
-    } else {
-        crate::util::sh_quote(s)
-    }
 }
 
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is

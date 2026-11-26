@@ -56,7 +56,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
             .iter()
             .map(|(guest, host)| (guest.as_str(), host.as_str()))
             .collect(),
-        created_at: super::rfc3339(m.created),
+        created_at: crate::util::rfc3339(m.created),
         name: sb.name(),
         agent: &m.agent,
         kits: m.rec.kits.iter().map(|k| k.reference.clone()).collect(),
