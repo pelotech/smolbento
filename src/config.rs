@@ -429,14 +429,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>, links: Symlink
                 .set_permissions(fs::Permissions::from_mode(m))?;
         }
         tmp.write_all(bytes)?;
-        tmp.as_file().sync_all()?;
+        crate::util::sync(tmp.as_file())?;
         tmp.persist(&target).map_err(|e| e.error)?;
         Ok(())
     })()
     .with_context(|| format!("writing {}", path.display()))?;
     // Make the rename itself durable; best effort (and not possible on every platform).
     if let Ok(d) = fs::File::open(&dir) {
-        let _ = d.sync_all();
+        let _ = crate::util::sync(&d);
     }
     Ok(())
 }

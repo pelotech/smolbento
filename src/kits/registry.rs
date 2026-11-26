@@ -700,7 +700,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
         if fs::hard_link(&src, &dst).is_err() {
             let tmp = tempfile::NamedTempFile::new_in(&blobs)?;
             fs::copy(&src, tmp.path()).with_context(|| format!("copying {}", src.display()))?;
-            tmp.as_file().sync_all()?;
+            crate::util::sync(tmp.as_file())?;
             persist(tmp, &dst)?;
         }
     }
