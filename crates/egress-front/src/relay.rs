@@ -49,13 +49,14 @@ const REFUSED: u8 = 111;
 /// How long the first-bytes read waits for more after the last bytes arrived.
 const FIRST_BYTES_IDLE: Duration = Duration::from_millis(200);
 
-/// How long a flow may take to present its preamble, and the interceptor to answer with a verdict.
+/// How long a flow may take to present its preamble, the interceptor to answer with a verdict, and
+/// the guest to send its first bytes (the interceptor waits for those itself, and gives up first).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Relay one flow: check smolvm's preamble against `front` and `decide` its destination, open a flow
 /// to `inner` for it (the gateway dialled as loopback), pass the connect verdict back, read the guest's
 /// first bytes and `decide` again with the name they ask for, then forward them and copy bytes both
-/// ways until both sides close.
+/// ways until both sides close. A guest that sends nothing in time is closed without that decide.
 ///
 /// A preamble with the wrong token is an error and the flow is dropped without touching `inner`. A
 /// destination deny answers `ECONNREFUSED` without touching `inner`; a name deny closes both sides and
@@ -102,8 +103,9 @@ fn relay_with_timeout(
         return Ok(());
     }
 
-    let first = read_first_bytes(&mut guest)?;
-    if decide(&flow(flow_id(&first))) == Decision::Deny {
+    let first = read_first_bytes(&mut guest, handshake)?;
+    // Silent past the wait (the interceptor gives up on it too), or closed: nothing to decide.
+    if first.is_empty() || decide(&flow(flow_id(&first))) == Decision::Deny {
         let _ = guest.shutdown(Shutdown::Both);
         let _ = upstream.shutdown(Shutdown::Both);
         return Ok(());
@@ -127,10 +129,12 @@ fn relay_with_timeout(
     down.and(up).map(|_| ())
 }
 
-/// Read what the guest sends first: until a whole ClientHello (or bytes that aren't one) or the end of
-/// HTTP headers is in, nothing more arrives for `FIRST_BYTES_IDLE`, the guest closes, or `MAX_CLIENT_HELLO` bytes.
-fn read_first_bytes(guest: &mut TcpStream) -> std::io::Result<Vec<u8>> {
-    guest.set_read_timeout(Some(FIRST_BYTES_IDLE))?;
+/// Read what the guest sends first: wait up to `wait` for its first bytes (and while they may still
+/// grow into an HTTP request line), then read until a whole ClientHello (or bytes that aren't one) or
+/// the end of HTTP headers is in, nothing more arrives for `FIRST_BYTES_IDLE`, the guest closes, or
+/// `MAX_CLIENT_HELLO` bytes. Empty when nothing came.
+fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Vec<u8>> {
+    guest.set_read_timeout(Some(wait))?;
     let mut first = Vec::new();
     let mut chunk = [0u8; 4096];
     while first.len() < MAX_CLIENT_HELLO {
@@ -142,13 +146,41 @@ fn read_first_bytes(guest: &mut TcpStream) -> std::io::Result<Vec<u8>> {
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         }
-        // Only TLS-looking bytes end on the ClientHello check: plain HTTP waits for its headers.
-        let tls_done = first[0] == 0x16 && peek_client_hello(&first) != Peek::Incomplete;
-        if tls_done || first.windows(4).any(|w| w == b"\r\n\r\n") {
+        // Only TLS-looking bytes end on the ClientHello check, and a ClientHello's random bytes
+        // may hold `\n\n`: plain HTTP waits for its headers' end, after any empty lines a server
+        // skips before the request line.
+        let tls = first[0] == 0x16;
+        let start = first.iter().position(|b| !matches!(b, b'\r' | b'\n'));
+        let head = start.map_or(&[][..], |s| &first[s..]);
+        let done = (tls && peek_client_hello(&first) != Peek::Incomplete)
+            || head.windows(4).any(|w| w == b"\r\n\r\n")
+            || (!tls && head.windows(2).any(|w| w == b"\n\n"));
+        if done {
             break;
         }
+        // A request line still coming may pause as long as the first bytes may: cut short, it
+        // would have no name.
+        let idle = if request_line_pending(head) {
+            wait
+        } else {
+            FIRST_BYTES_IDLE
+        };
+        guest.set_read_timeout(Some(idle))?;
     }
     Ok(first)
+}
+
+/// Whether `head` may still grow into an HTTP/1 request line: a prefix of a method, or a method, a
+/// space and more, with no `\n` yet.
+fn request_line_pending(head: &[u8]) -> bool {
+    const METHODS: [&[u8]; 9] = [
+        b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"CONNECT", b"OPTIONS", b"TRACE", b"PATCH",
+    ];
+    !head.contains(&b'\n')
+        && METHODS.iter().any(|m| match head.strip_prefix(*m) {
+            Some(rest) => rest.first().is_none_or(|&b| b == b' '),
+            None => m.starts_with(head),
+        })
 }
 
 #[cfg(test)]
@@ -358,36 +390,154 @@ mod tests {
         assert_eq!(names(&seen), [None, Some("api.example.com".into())]);
     }
 
+    /// Relays one flow to 1.2.3.4:`port` whose guest sends `parts` (sleeping `pause` before each) to
+    /// an interceptor that expects them and answers `reply`, and returns the flows `decide` saw.
+    fn guest_sends(port: u16, parts: &[&[u8]], pause: Duration, reply: &'static [u8]) -> Vec<Flow> {
+        let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
+        let want = parts.concat();
+        let fake = std::thread::spawn(move || {
+            let (mut s, _) = inner_l.accept().unwrap();
+            inner.read_preamble(&mut s).unwrap();
+            s.write_all(&[VERDICT_CONNECTED]).unwrap();
+            let mut got = vec![0u8; want.len()];
+            s.read_exact(&mut got).unwrap();
+            assert_eq!(got, want);
+            s.write_all(reply).unwrap();
+        });
+        let (decide, seen) = recording(|_| false);
+        let (mut client, server_side) = pair();
+        client.set_nodelay(true).unwrap();
+        let r = std::thread::spawn(move || relay(server_side, &front, &inner, &decide));
+        let dest = SocketAddr::new(Ipv4Addr::new(1, 2, 3, 4).into(), port);
+        client.write_all(&front.preamble(dest)).unwrap();
+        let mut verdict = [9u8; 1];
+        client.read_exact(&mut verdict).unwrap();
+        assert_eq!(verdict[0], VERDICT_CONNECTED);
+        for part in parts {
+            std::thread::sleep(pause);
+            client.write_all(part).unwrap();
+        }
+        let mut got = vec![0u8; reply.len()];
+        client.read_exact(&mut got).unwrap();
+        assert_eq!(got, reply);
+        drop(client);
+        fake.join().unwrap();
+        r.join().unwrap().unwrap();
+        seen.lock().unwrap().clone()
+    }
+
     #[test]
-    fn a_silent_guest_is_decided_without_a_name_and_still_spliced() {
+    fn a_delayed_client_hello_is_decided_by_its_sni() {
+        let hello = client_hello(Some("gist.github.com"));
+        let seen = guest_sends(443, &[&hello], Duration::from_millis(250), b"ok");
+        assert_eq!(seen[1].name.as_deref(), Some("gist.github.com"));
+        assert_eq!(seen[1].kind, FlowKind::Tls);
+    }
+
+    #[test]
+    fn an_ssh_client_is_decided_by_address() {
+        let start = std::time::Instant::now();
+        let seen = guest_sends(
+            22,
+            &[b"SSH-2.0-x\r\n"],
+            Duration::ZERO,
+            b"SSH-2.0-server\r\n",
+        );
+        let kinds: Vec<_> = seen.iter().map(|f| (f.name.clone(), f.kind)).collect();
+        assert_eq!(kinds, [(None, FlowKind::Other), (None, FlowKind::Other)]);
+        // Decided after the 200 ms idle, not held for the handshake timeout like an HTTP line.
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn request_line_pending_holds_only_for_a_method_prefix() {
+        for head in [
+            &b""[..],
+            b"G",
+            b"PA",
+            b"GET",
+            b"GET ",
+            b"OPTIONS * HTTP/1.1",
+        ] {
+            assert!(request_line_pending(head), "{head:?}");
+        }
+        for head in [
+            &b"S"[..],
+            b"SSH-2.0-x",
+            b"GETX",
+            b"GET / HTTP/1.1\r\n",
+            b"\x16\x03",
+        ] {
+            assert!(!request_line_pending(head), "{head:?}");
+        }
+    }
+
+    #[test]
+    fn a_paused_http_request_line_is_still_named() {
+        let rest: &[u8] = b"ET / HTTP/1.1\r\nHost: gist.github.com\r\n\r\n";
+        let seen = guest_sends(80, &[b"G", rest], Duration::from_millis(250), b"ok");
+        assert_eq!(seen[1].name.as_deref(), Some("gist.github.com"));
+        assert_eq!(seen[1].kind, FlowKind::Http);
+    }
+
+    #[test]
+    fn a_client_hello_with_lf_lf_split_over_two_writes_is_read_whole() {
+        let mut hello = client_hello(Some("api.example.com"));
+        // The ClientHello's random field: `\n\n` there must not end a TLS read early.
+        hello[11..13].copy_from_slice(b"\n\n");
+        let parts: [&[u8]; 2] = [&hello[..13], &hello[13..]];
+        let seen = guest_sends(443, &parts, Duration::from_millis(50), b"ok");
+        assert_eq!(seen[1].name.as_deref(), Some("api.example.com"));
+    }
+
+    #[test]
+    fn empty_lines_before_a_request_dont_end_the_read() {
+        let req: &[u8] = b"GET / HTTP/1.1\r\nHost: gist.github.com\r\n\r\n";
+        let seen = guest_sends(80, &[b"\r\n\r\n", req], Duration::from_millis(50), b"ok");
+        assert_eq!(seen[1].name.as_deref(), Some("gist.github.com"));
+        assert_eq!(seen[1].kind, FlowKind::Http);
+    }
+
+    #[test]
+    fn a_silent_guest_is_closed_without_a_second_decide() {
         let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
         let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
         let fake = std::thread::spawn(move || {
             let (mut s, _) = inner_l.accept().unwrap();
             inner.read_preamble(&mut s).unwrap();
             s.write_all(&[VERDICT_CONNECTED]).unwrap();
-            s.write_all(b"SSH-2.0-server\r\n").unwrap();
-            let mut buf = [0u8; 16];
-            s.read_exact(&mut buf).unwrap();
-            assert_eq!(&buf, b"SSH-2.0-client\r\n");
+            let mut got = Vec::new();
+            let _ = s.read_to_end(&mut got);
+            assert!(got.is_empty(), "the interceptor saw {} bytes", got.len());
         });
         let (decide, seen) = recording(|_| false);
         let (mut client, server_side) = pair();
-        let r = std::thread::spawn(move || relay(server_side, &front, &inner, &decide));
+        let handshake = Duration::from_millis(300);
+        let r = std::thread::spawn(move || {
+            relay_with_timeout(server_side, &front, &inner, &decide, handshake)
+        });
         client
             .write_all(&front.preamble("1.2.3.4:22".parse().unwrap()))
             .unwrap();
         let mut verdict = [9u8; 1];
         client.read_exact(&mut verdict).unwrap();
         assert_eq!(verdict[0], VERDICT_CONNECTED);
-        let mut banner = [0u8; 16];
-        client.read_exact(&mut banner).unwrap();
-        assert_eq!(&banner, b"SSH-2.0-server\r\n");
-        client.write_all(b"SSH-2.0-client\r\n").unwrap();
-        fake.join().unwrap();
+        // Bounded, so a relay that splices instead fails the test rather than hanging it.
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut rest = Vec::new();
+        let closed = client.read_to_end(&mut rest);
         drop(client);
         r.join().unwrap().unwrap();
-        assert_eq!(names(&seen), [None, None]);
+        fake.join().unwrap();
+        assert!(closed.is_ok() && rest.is_empty(), "{closed:?} {rest:?}");
+        assert_eq!(names(&seen), [None]);
     }
 
     #[test]

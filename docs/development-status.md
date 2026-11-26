@@ -79,8 +79,8 @@ meanwhile.
   substitutes credentials. Meanwhile, sentinel OAuth binds only its API key (logins happen in the
   sandbox). Preferred: an OAuth sentinel mode upstream in smolvm.
 - **Request rules: the rest.** Hosted sandboxes enforce method, path and query rules
-  ([Request rules](network-and-secrets.md#request-rules)). Still to do: closing the bypasses there (a
-  spoofed or missing name on a ruled host's address), plain HTTP filtered per request rather than
+  ([Request rules](network-and-secrets.md#request-rules)). Still to do: closing the bypass there (a
+  spoofed name on a ruled host's address), plain HTTP filtered per request rather than
   refused, and request rules under `network.egress=smolvm`.
 - **Guest DNS upstream order.** Not yet checked: a name the first resolver refuses while a later one
   answers. No workaround; the e2e tests avoid such names.

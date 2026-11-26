@@ -202,9 +202,10 @@ Each connection is decided twice, and smolvm's allow list still applies first:
 
 - **What the guest sees**, either way: the connection opens, then resets, not refused. smolvm accepts
   it before asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.
-- A client that sends no name (SSH, TLS without SNI), or sends nothing for 200 ms before its name
-  is in, is judged by address and port only, so name rules don't apply to it. The name is whatever
-  the guest sends, so name rules stop cooperative clients, not a hostile agent: see
+- A client that speaks neither TLS nor HTTP (SSH) is judged by address and port only, so name rules
+  don't apply to it. TLS without SNI, or HTTP without one `Host:`, has no name: it passes only on an
+  IP or CIDR allow rule (or `allow-all`). The name is whatever the guest sends, so name rules stop
+  cooperative clients, not a hostile agent: see
   [Security](SECURITY.md#network-and-secrets).
 - The host's gateway (`host.docker.internal`, `100.96.0.1`) is judged strictly as `localhost:<port>`:
   only a `localhost` rule for that port opens it.
