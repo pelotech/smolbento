@@ -338,20 +338,28 @@ impl Settings {
         if key == "skills.defaultMode" {
             crate::skills::Mode::parse(value)?;
         }
-        self.file
-            .settings
-            .insert(key.to_string(), value.to_string());
-        self.save()
+        self.change(|f| {
+            f.settings.insert(key.to_string(), value.to_string());
+        })
     }
 
     pub fn unset(&mut self, key: &str) -> Result<()> {
         Self::def(key)?;
-        self.file.settings.remove(key);
-        self.save()
+        self.change(|f| {
+            f.settings.remove(key);
+        })
     }
 
-    fn save(&self) -> Result<()> {
-        save_toml(&self.path, &self.file)
+    /// Changes the file as it is now, under its lock: what another command set since this one
+    /// loaded stays. A file that doesn't parse is replaced, as `load` reads it: `settings` is how
+    /// a broken config.toml gets fixed, while other commands refuse to run.
+    fn change(&mut self, f: impl FnOnce(&mut File)) -> Result<()> {
+        let _lock = lock(&self.path)?;
+        let mut file: File = load_toml(&self.path).unwrap_or_default();
+        f(&mut file);
+        save_toml(&self.path, &file)?;
+        self.file = file;
+        Ok(())
     }
 }
 
@@ -941,6 +949,21 @@ mod tests {
         assert!(err.unwrap().contains("TOML parse error"));
         assert_eq!(s.get("docker.enabled").unwrap().1, Source::Default);
         assert_eq!(s.get("smolvm.path").unwrap().1, Source::Env);
+    }
+
+    /// Two `settings set` runs at once, each with the settings it loaded: neither change is lost.
+    #[test]
+    fn concurrent_sets_keep_both_settings() {
+        let (_d, paths) = test_paths();
+        let (mut a, _) = Settings::load(&paths, BTreeMap::new());
+        let (mut b, _) = Settings::load(&paths, BTreeMap::new());
+        a.set("docker.enabled", "false").unwrap();
+        b.set("env.rememberHostCommands", "true").unwrap();
+        let (s, _) = Settings::load(&paths, BTreeMap::new());
+        assert_eq!(s.get("docker.enabled").unwrap().1, Source::File);
+        assert_eq!(s.get("env.rememberHostCommands").unwrap().1, Source::File);
+        // The one that set last sees both, as the next command would.
+        assert_eq!(b.get("docker.enabled").unwrap().1, Source::File);
     }
 
     #[test]
