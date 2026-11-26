@@ -4,10 +4,8 @@
 
 use super::request_rules::request_policy;
 use crate::config::Paths;
-use crate::policy::compile::HOST_GATEWAY;
 use egress_front::{
-    Action, Decision, Flow, FlowKind, HeaderMap, Inspection, Policy, RequestFilter, RequestInfo,
-    host_matches,
+    Decision, Flow, FlowKind, GATEWAY, HeaderMap, Policy, RequestFilter, RequestInfo, host_matches,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -22,18 +20,27 @@ type Stamp = Option<(SystemTime, u64, u64, u64)>;
 /// asking costs a `stat`.
 pub struct PolicySource {
     paths: Paths,
-    pub(super) sandbox: String,
+    sandbox: String,
     state: Mutex<Loaded>,
 }
 
+/// `policy.toml` as of one read: what a decision uses throughout, so it never mixes two versions.
 #[derive(Clone)]
-struct Loaded {
+pub struct Loaded {
     stamp: Stamp,
     /// `policy.toml` as read, or why it can't be.
-    file: Result<Arc<crate::policy::Policy>, String>,
-    policy: Arc<Policy>,
-    /// The policy's `terminate_hosts`; `None` while `policy.toml` can't be used.
-    ruled: Option<Vec<String>>,
+    pub file: Result<Arc<crate::policy::Policy>, String>,
+    /// The request policy. When `policy.toml` can't be read or mapped, one that refuses every
+    /// request: the filter sees decrypted hosts only, the ruled and credential hosts.
+    pub policy: Arc<Policy>,
+}
+
+impl Loaded {
+    /// The hosts the rules name, in `terminate_hosts` form; `None` while `policy.toml` can't be
+    /// used.
+    pub fn ruled(&self) -> Option<Vec<String>> {
+        self.file.is_ok().then(|| self.policy.terminate_hosts())
+    }
 }
 
 impl PolicySource {
@@ -45,24 +52,8 @@ impl PolicySource {
         }
     }
 
-    /// The current request policy. When `policy.toml` can't be read or mapped, one that refuses
-    /// every request: the filter sees decrypted hosts only, the ruled and credential hosts.
-    pub fn current(&self) -> Arc<Policy> {
-        self.refresh().policy
-    }
-
-    /// The current `policy.toml`, or why it can't be read.
-    pub fn file(&self) -> Result<Arc<crate::policy::Policy>, String> {
-        self.refresh().file
-    }
-
-    /// The hosts the current rules name, in `terminate_hosts` form; `None` while `policy.toml` can't
-    /// be used.
-    pub fn ruled_hosts(&self) -> Option<Vec<String>> {
-        self.refresh().ruled
-    }
-
-    fn refresh(&self) -> Loaded {
+    /// The current state, re-read if the file's stamp changed.
+    pub fn snapshot(&self) -> Loaded {
         let now = stamp(&self.paths);
         {
             let s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -82,30 +73,25 @@ fn load(paths: &Paths, sandbox: &str, now: Stamp) -> Loaded {
     let file = crate::policy::Policy::load(paths)
         .map(Arc::new)
         .map_err(|e| format!("{e:#}"));
-    let (policy, ruled) = match &file {
-        Ok(p) => {
-            let p = request_policy(p, sandbox);
-            let ruled = p.terminate_hosts();
-            (Arc::new(p), Some(ruled))
-        }
+    let policy = match &file {
+        Ok(p) => Arc::new(request_policy(p, sandbox)),
         Err(e) => {
             // The detail goes to the unit's log only: a 403 never shows the policy's content.
             eprintln!("egress: policy.toml unreadable, refusing requests on ruled hosts: {e}");
-            (Arc::new(REFUSE), None)
+            Arc::new(REFUSE)
         }
     };
     Loaded {
         stamp: now,
         file,
         policy,
-        ruled,
     }
 }
 
 /// Refuses every request.
 const REFUSE: Policy = Policy {
     rules: vec![],
-    default: Action::Deny,
+    default: Decision::Deny,
 };
 
 fn stamp(paths: &Paths) -> Stamp {
@@ -127,16 +113,12 @@ impl Filter {
         headers: &HeaderMap,
     ) -> Result<(), String> {
         // The hook has already resolved dot segments and `\`, so the target goes as it is.
-        let result = (self.0.current()).request(host, port, method, target, headers);
+        let result = (self.0.snapshot().policy).request(host, port, method, target, headers);
         // The rule id only: the target, its headers and a miss's refusal (which quotes the path)
         // can carry a token.
-        let rule = result.as_ref().err().and_then(|e| {
-            e.strip_prefix("request denied by policy (rule ")
-                .and_then(|rest| rest.split_once(')'))
-                .map(|(id, _)| id)
-        });
+        let rule = result.as_ref().err().and_then(|e| e.rule.as_deref());
         tracing::debug!(host = ?host, port, method = ?method, denied = result.is_err(), rule, "egress request");
-        result
+        result.map_err(|e| e.message)
     }
 }
 
@@ -146,23 +128,21 @@ impl RequestFilter for Filter {
     }
 }
 
-/// The request-rule step of a flow's decision, after Phase 3's allowed it; `None` when no request
-/// rule names its host. `terminated` is what the interceptor decrypts.
+/// The request-rule step of a flow's decision, once the connection rules have allowed it; `None`
+/// when no request rule names its host. `terminated` is what the interceptor decrypts.
 pub fn connection(
     policy: &Policy,
     flow: &Flow,
     terminated: &[String],
 ) -> Option<(Decision, String)> {
     // The gateway is the host's `localhost`, whatever name the guest gives it, and never decrypted.
-    let gateway = flow.ip.to_string() == HOST_GATEWAY;
+    let gateway = flow.ip == GATEWAY;
     let host = if gateway {
         "localhost"
     } else {
         flow.name.as_deref()?
     };
-    let Inspection::Inspect { uninspectable } = policy.inspection(host, flow.port) else {
-        return None;
-    };
+    let uninspectable = policy.inspection(host, flow.port)?;
     Some(match flow.kind {
         FlowKind::Http => (
             Decision::Deny,
@@ -177,8 +157,8 @@ pub fn connection(
             "TLS to a ruled host that isn't decrypted".into(),
         ),
         FlowKind::Other => match uninspectable {
-            Action::Allow => (Decision::Allow, "request rules only deny".into()),
-            Action::Deny => (
+            Decision::Allow => (Decision::Allow, "request rules only deny".into()),
+            Decision::Deny => (
                 Decision::Deny,
                 "request rules apply and this flow can't be read".into(),
             ),
@@ -231,7 +211,6 @@ mod tests {
         }
     }
 
-    /// A policy with a bounded allow on `a.com` and a bounded deny on `d.com`.
     /// Deny-all, so no connection rule makes a bounded allow moot.
     fn deny_all() -> policy::Policy {
         policy::Policy {
@@ -240,6 +219,7 @@ mod tests {
         }
     }
 
+    /// A policy with a bounded allow on `a.com` and a bounded deny on `d.com`.
     fn rules() -> Policy {
         let mut p = deny_all();
         add(&mut p, D::Allow, "a.com", "GET");
@@ -298,7 +278,7 @@ mod tests {
         assert_eq!(d("d.com"), Decision::Allow);
         // The gateway is never decrypted, with a bounded allow or only a bounded deny.
         let gw = Flow {
-            ip: HOST_GATEWAY.parse().unwrap(),
+            ip: GATEWAY,
             ..flow("localhost", FlowKind::Tls)
         };
         for d in [D::Allow, D::Deny] {
@@ -331,7 +311,8 @@ mod tests {
         assert_eq!(d("a.com").unwrap().0, Decision::Deny);
         assert_eq!(d("d.com").unwrap().0, Decision::Allow);
         assert_eq!(d("other.com"), None);
-        // A flow decided from its destination alone, with no name yet, is left to Phase 3.
+        // A flow decided from its destination alone, with no name yet, is left to the connection
+        // rules.
         let nameless = Flow {
             name: None,
             ..flow("a.com", FlowKind::Other)
@@ -394,14 +375,14 @@ mod tests {
         save(&paths, &p, 1);
         let source = Arc::new(PolicySource::new(&paths, SB));
         let f = Filter(source.clone());
-        assert_eq!(source.ruled_hosts(), Some(vec!["d.com".to_string()]));
+        assert_eq!(source.snapshot().ruled(), Some(vec!["d.com".to_string()]));
 
         std::fs::write(paths.policy_file(), "mode = [not toml").unwrap();
         bump(&paths, 2);
         for host in ["d.com", "cred.com"] {
             assert!(judge(&f, host, "GET").is_err(), "{host}");
         }
-        assert_eq!(source.ruled_hosts(), None, "keeps the running set");
+        assert_eq!(source.snapshot().ruled(), None, "keeps the running set");
 
         save(&paths, &p, 3);
         assert_eq!(

@@ -1,7 +1,7 @@
 //! `_serve egress SANDBOX`: the interceptor a hosted sandbox's egress unit runs.
 
 use super::filter::{Filter, PolicySource, Restart, connection};
-use super::rules::Rules;
+use super::rules;
 use super::{load_ca, policy, token};
 use crate::cli::Ctx;
 use crate::sandbox;
@@ -85,14 +85,14 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         .flat_map(|b| b.hosts.clone())
         .collect();
     let source = Arc::new(PolicySource::new(&ctx.paths, name));
-    let ruled = source.ruled_hosts().unwrap_or_default();
+    let ruled = source.snapshot().ruled().unwrap_or_default();
     let mut terminated = hosts.clone();
     terminated.extend(ruled.iter().cloned());
     terminated.sort();
     terminated.dedup();
     // The unit's socket starts the process again on the next connection.
     let restart = Restart::new(ruled, Box::new(|| std::process::exit(0)));
-    let rules = Rules::new(source.clone(), sb.meta.rec.host_access, hosts);
+    let host_access = sb.meta.rec.host_access;
     let config = InterceptorConfig {
         machine: sb.machine,
         policy: policy(label),
@@ -107,11 +107,15 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         terminate_hosts: terminated.clone(),
         request_filter: Some(Arc::new(Filter(source.clone()))),
     };
+    let sandbox = name.to_string();
     let decide = Arc::new(move |f: &Flow| {
-        restart.check(source.ruled_hosts().as_deref());
-        let (mut decision, mut reason) = rules.decide(f);
+        // One read of the policy for the whole decision.
+        let snap = source.snapshot();
+        restart.check(snap.ruled().as_deref());
+        let (mut decision, mut reason) =
+            rules::decide(&snap.file, &sandbox, host_access, &hosts, f);
         if decision == Decision::Allow
-            && let Some(step) = connection(&source.current(), f, &terminated)
+            && let Some(step) = connection(&snap.policy, f, &terminated)
         {
             (decision, reason) = step;
         }

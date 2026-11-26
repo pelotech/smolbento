@@ -1,7 +1,7 @@
 use super::*;
 use http::HeaderMap;
 
-fn rule(action: Action, host: &str, methods: &[&str], path: &str) -> Rule {
+fn rule(action: Decision, host: &str, methods: &[&str], path: &str) -> Rule {
     Rule {
         id: None,
         action,
@@ -21,17 +21,17 @@ fn rule(action: Action, host: &str, methods: &[&str], path: &str) -> Rule {
 }
 
 fn allow(host: &str, methods: &[&str], path: &str) -> Rule {
-    rule(Action::Allow, host, methods, path)
+    rule(Decision::Allow, host, methods, path)
 }
 
 fn deny(host: &str, methods: &[&str], path: &str) -> Rule {
-    rule(Action::Deny, host, methods, path)
+    rule(Decision::Deny, host, methods, path)
 }
 
 fn policy(rules: Vec<Rule>) -> Policy {
     let p = Policy {
         rules,
-        default: Action::Allow,
+        default: Decision::Allow,
     };
     p.validate().unwrap();
     p
@@ -43,6 +43,7 @@ fn check(p: &Policy, method: &str, target: &str) -> Result<(), String> {
 
 fn check_with(p: &Policy, method: &str, target: &str, headers: &HeaderMap) -> Result<(), String> {
     p.request("h", 443, method, target, headers)
+        .map_err(|e| e.message)
 }
 
 fn query(name: &str, value: ValueMatch) -> QueryMatch {
@@ -196,7 +197,7 @@ fn a_host_with_bounded_allows_refuses_the_rest() {
     );
     let strict = Policy {
         rules: vec![],
-        default: Action::Deny,
+        default: Decision::Deny,
     };
     assert!(
         strict
@@ -349,28 +350,19 @@ fn inspection_by_rule_kind() {
         on_22,
         sub,
     ]);
-    let inspect = |uninspectable| Inspection::Inspect { uninspectable };
-    assert_eq!(p.inspection("a", 443), inspect(Action::Deny));
+    assert_eq!(p.inspection("a", 443), Some(Decision::Deny));
     assert_eq!(
         p.inspection("A.", 22),
-        inspect(Action::Deny),
+        Some(Decision::Deny),
         "case and a trailing dot"
     );
-    assert_eq!(p.inspection("b", 443), inspect(Action::Allow));
-    assert_eq!(p.inspection("c", 443), Inspection::None);
-    assert_eq!(p.inspection("ssh.h", 22), inspect(Action::Deny));
-    assert_eq!(p.inspection("ssh.h", 443), Inspection::None);
-    assert_eq!(p.inspection("api.d.com", 443), inspect(Action::Allow));
-    assert_eq!(
-        p.inspection("d.com", 443),
-        Inspection::None,
-        "never the apex"
-    );
-    assert_eq!(
-        p.inspection("a.b.d.com", 443),
-        Inspection::None,
-        "one label"
-    );
+    assert_eq!(p.inspection("b", 443), Some(Decision::Allow));
+    assert_eq!(p.inspection("c", 443), None);
+    assert_eq!(p.inspection("ssh.h", 22), Some(Decision::Deny));
+    assert_eq!(p.inspection("ssh.h", 443), None);
+    assert_eq!(p.inspection("api.d.com", 443), Some(Decision::Allow));
+    assert_eq!(p.inspection("d.com", 443), None, "never the apex");
+    assert_eq!(p.inspection("a.b.d.com", 443), None, "one label");
 }
 
 #[test]
@@ -402,17 +394,8 @@ fn terminate_hosts_forms() {
         any_depth: true,
     };
     let p = policy(vec![deep]);
-    assert_eq!(
-        p.inspection("a.b.deep.com", 443),
-        Inspection::Inspect {
-            uninspectable: Action::Allow
-        }
-    );
-    assert_eq!(
-        p.inspection("deep.com", 443),
-        Inspection::None,
-        "never the apex"
-    );
+    assert_eq!(p.inspection("a.b.deep.com", 443), Some(Decision::Allow));
+    assert_eq!(p.inspection("deep.com", 443), None, "never the apex");
 }
 
 #[test]
@@ -430,7 +413,7 @@ fn validate_refuses_rule_paths_that_never_match() {
     no_methods.request.methods = Methods::Only(vec![]);
     let p = Policy {
         rules: vec![no_methods],
-        default: Action::Allow,
+        default: Decision::Allow,
     };
     assert!(p.validate().is_err());
 }

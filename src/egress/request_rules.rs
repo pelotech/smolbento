@@ -2,7 +2,8 @@
 //! `egress_front` request policy. Connection rules stay with `policy::compile::decide`.
 
 use egress_front::{
-    Action, Case, HostMatch, Methods, PathGlob, Policy, QueryMatch, RequestMatch, Rule, ValueMatch,
+    Case, Decision as Verdict, HostMatch, Methods, PathGlob, Policy, QueryMatch, RequestMatch,
+    Rule, ValueMatch,
 };
 
 use crate::policy::rules::{Pattern, Resource};
@@ -29,10 +30,8 @@ pub fn request_policy(policy: &policy::Policy, sandbox: &str) -> Policy {
         }
         list.retain(|r| !r.resources.is_empty());
     }
-    let admits = |target: &str| {
-        let host_access = compile::host_access(&plain, sandbox);
-        compile::decide(&plain, sandbox, &[], host_access, target).allowed
-    };
+    let host_access = compile::host_access(&plain, sandbox);
+    let admits = |target: &str| compile::decide(&plain, sandbox, &[], host_access, target).allowed;
     let spare = spare_port(policy);
     let mut rules = Vec::new();
     for (r, _) in policy
@@ -59,7 +58,7 @@ pub fn request_policy(policy: &policy::Policy, sandbox: &str) -> Policy {
     }
     Policy {
         rules,
-        default: Action::Allow,
+        default: Verdict::Allow,
     }
 }
 
@@ -78,12 +77,9 @@ pub fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
             Case::Insensitive
         },
     };
-    let mut one = Policy {
-        rules: vec![rule],
-        default: Action::Allow,
-    };
-    one.validate()?;
-    Ok(one.rules.remove(0))
+    rule.validate()
+        .map_err(|why| format!("rule {}: {why}", r.id))?;
+    Ok(rule)
 }
 
 /// Whether connection rules alone admit every host and port a bounded allow on `host` names. A
@@ -139,10 +135,10 @@ pub fn check(
     })
 }
 
-fn action(d: Decision) -> Action {
+fn action(d: Decision) -> Verdict {
     match d {
-        Decision::Allow => Action::Allow,
-        Decision::Deny => Action::Deny,
+        Decision::Allow => Verdict::Allow,
+        Decision::Deny => Verdict::Deny,
     }
 }
 
@@ -350,7 +346,7 @@ mod tests {
             ]
         );
         assert!(got.iter().all(|r| r.id.as_deref() == Some(id.as_str())
-            && r.action == Action::Allow
+            && r.action == Verdict::Allow
             && r.case == Case::Insensitive));
         // Bad query forms are refused.
         for bad in ["x", "=v", "a*=v", "x=a*b", "x=*a*"] {
@@ -365,7 +361,7 @@ mod tests {
         p.allow(Some("s1"), "a.com");
         let got = request_policy(&p, "s1");
         assert!(got.rules.is_empty());
-        assert_eq!(got.default, Action::Allow);
+        assert_eq!(got.default, Verdict::Allow);
     }
 
     #[test]

@@ -41,7 +41,7 @@ pub enum Decision {
 pub type Decide = std::sync::Arc<dyn Fn(&Flow) -> Decision + Send + Sync>;
 
 /// smolvm's gateway, which the host can't dial.
-const GATEWAY: IpAddr = IpAddr::V4(Ipv4Addr::new(100, 96, 0, 1));
+pub const GATEWAY: IpAddr = IpAddr::V4(Ipv4Addr::new(100, 96, 0, 1));
 
 /// The verdict that refuses a flow: `ECONNREFUSED`, in `connect_verdict`'s errno convention.
 const REFUSED: u8 = 111;
@@ -250,32 +250,9 @@ mod tests {
 
     #[test]
     fn relay_forwards_the_destination_and_verdict() {
-        let dest: SocketAddr = "93.184.216.34:443".parse().unwrap();
-        let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
-        let fake = std::thread::spawn(move || {
-            let (mut s, _) = inner_l.accept().unwrap();
-            assert_eq!(inner.read_preamble(&mut s).unwrap(), dest);
-            s.write_all(&[VERDICT_CONNECTED]).unwrap();
-            let mut buf = [0u8; 4];
-            s.read_exact(&mut buf).unwrap();
-            assert_eq!(&buf, b"ping");
-            s.write_all(b"pong").unwrap();
-        });
-
-        let (mut client, server_side) = pair();
-        let r = std::thread::spawn(move || relay(server_side, &front, &inner, &allow()));
-        client.write_all(&front.preamble(dest)).unwrap();
-        let mut verdict = [9u8; 1];
-        client.read_exact(&mut verdict).unwrap();
-        assert_eq!(verdict[0], VERDICT_CONNECTED);
-        client.write_all(b"ping").unwrap();
-        let mut buf = [0u8; 4];
-        client.read_exact(&mut buf).unwrap();
-        assert_eq!(&buf, b"pong");
-        drop(client);
-        fake.join().unwrap();
-        r.join().unwrap().unwrap();
+        let seen = guest_sends(443, &[b"ping"], Duration::ZERO, b"pong");
+        assert_eq!(seen[0].ip, Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(seen[0].port, 443);
     }
 
     #[test]
@@ -371,38 +348,9 @@ mod tests {
     #[test]
     fn a_split_client_hello_is_read_whole_and_forwarded() {
         let hello = client_hello(Some("api.example.com"));
-        let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
-        let want = hello.clone();
-        let fake = std::thread::spawn(move || {
-            let (mut s, _) = inner_l.accept().unwrap();
-            inner.read_preamble(&mut s).unwrap();
-            s.write_all(&[VERDICT_CONNECTED]).unwrap();
-            let mut got = vec![0u8; want.len()];
-            s.read_exact(&mut got).unwrap();
-            assert_eq!(got, want);
-            s.write_all(b"ok").unwrap();
-        });
-        let (decide, seen) = recording(|_| false);
-        let (mut client, server_side) = pair();
-        client.set_nodelay(true).unwrap();
-        let r = std::thread::spawn(move || relay(server_side, &front, &inner, &decide));
-        client
-            .write_all(&front.preamble("1.2.3.4:443".parse().unwrap()))
-            .unwrap();
-        let mut verdict = [9u8; 1];
-        client.read_exact(&mut verdict).unwrap();
-        for part in [&hello[..3], &hello[3..20], &hello[20..]] {
-            client.write_all(part).unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let mut ok = [0u8; 2];
-        client.read_exact(&mut ok).unwrap();
-        assert_eq!(&ok, b"ok");
-        drop(client);
-        fake.join().unwrap();
-        r.join().unwrap().unwrap();
-        assert_eq!(names(&seen), [None, Some("api.example.com".into())]);
+        let parts: [&[u8]; 3] = [&hello[..3], &hello[3..20], &hello[20..]];
+        let seen = guest_sends(443, &parts, Duration::from_millis(50), b"ok");
+        assert_eq!(seen[1].name.as_deref(), Some("api.example.com"));
     }
 
     /// Relays one flow to 1.2.3.4:`port` whose guest sends `parts` (sleeping `pause` before each) to
@@ -411,9 +359,10 @@ mod tests {
         let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
         let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
         let want = parts.concat();
+        let dest = SocketAddr::new(Ipv4Addr::new(1, 2, 3, 4).into(), port);
         let fake = std::thread::spawn(move || {
             let (mut s, _) = inner_l.accept().unwrap();
-            inner.read_preamble(&mut s).unwrap();
+            assert_eq!(inner.read_preamble(&mut s).unwrap(), dest);
             s.write_all(&[VERDICT_CONNECTED]).unwrap();
             let mut got = vec![0u8; want.len()];
             s.read_exact(&mut got).unwrap();
@@ -424,7 +373,6 @@ mod tests {
         let (mut client, server_side) = pair();
         client.set_nodelay(true).unwrap();
         let r = std::thread::spawn(move || relay(server_side, &front, &inner, &decide));
-        let dest = SocketAddr::new(Ipv4Addr::new(1, 2, 3, 4).into(), port);
         client.write_all(&front.preamble(dest)).unwrap();
         let mut verdict = [9u8; 1];
         client.read_exact(&mut verdict).unwrap();

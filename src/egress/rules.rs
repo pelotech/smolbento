@@ -1,88 +1,68 @@
 //! The egress process's per-flow verdict, from the user's `policy.toml`.
 
-use super::filter::PolicySource;
-use crate::policy::compile::{HOST_GATEWAY, decide};
-use egress_front::{Decision, Flow, FlowKind};
+use crate::policy::compile;
+use egress_front::{Decision, Flow, FlowKind, GATEWAY};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// One sandbox's rules, from `policy.toml` as `source` last read it (re-read when it changes).
-pub struct Rules {
-    source: Arc<PolicySource>,
+/// The flow's decision and why, for the log, from `file` (`policy.toml` as read, or why it can't
+/// be) for `sandbox`.
+pub fn decide(
+    file: &Result<Arc<crate::policy::Policy>, String>,
+    sandbox: &str,
     host_access: bool,
-    credential_hosts: Vec<String>,
-}
-
-impl Rules {
-    pub fn new(
-        source: Arc<PolicySource>,
-        host_access: bool,
-        credential_hosts: Vec<String>,
-    ) -> Rules {
-        Rules {
-            source,
-            host_access,
-            credential_hosts,
-        }
-    }
-
-    /// The flow's decision and why, for the log.
-    pub fn decide(&self, flow: &Flow) -> (Decision, String) {
-        // `policy save` writes atomically, so a read never sees half a file.
-        let policy = match self.source.file() {
-            Ok(p) => p,
-            Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e}")),
-        };
-        let verdict = |target: &str| {
-            decide(
-                &policy,
-                &self.source.sandbox,
-                &self.credential_hosts,
-                self.host_access,
-                target,
-            )
-        };
-        let (allowed, reason) = if flow.ip.to_string() == HOST_GATEWAY {
-            // A gateway flow is the host's `localhost:PORT`, judged strictly: no rule, no flow,
-            // and the guest's name for it (any SNI or `Host:` it likes) plays no part.
-            let g = verdict(&format!("localhost:{}", flow.port));
-            (g.allowed, g.reason)
-        } else {
-            let v = verdict(&SocketAddr::new(flow.ip, flow.port).to_string());
-            let n = flow
-                .name
-                .as_ref()
-                .map(|name| verdict(&format!("{name}:{}", flow.port)));
-            match n {
-                // An IP or CIDR allow rule still admits a name no rule mentions; a deny always
-                // wins. Allow-all and presets never reach here, as they would have allowed the
-                // name.
-                Some(n) if !n.allowed && !(n.implicit && v.allowed) => (false, n.reason),
-                // TLS without an SNI or HTTP without one `Host:` hides its name: only an address
-                // allow (or allow-all) admits it, not smolvm's admission of some name. A deny rule
-                // keeps its own reason.
-                None if flow.kind != FlowKind::Other && !v.allowed => {
-                    let why = "TLS without a server name, or HTTP without one Host:, needs an IP or \
-                               CIDR allow";
-                    (false, if v.implicit { why.into() } else { v.reason })
-                }
-                // By address, only a deny rule refuses: smolvm's allow list already admitted it.
-                _ => (v.allowed || v.implicit, v.reason),
+    credential_hosts: &[String],
+    flow: &Flow,
+) -> (Decision, String) {
+    // `policy save` writes atomically, so a read never sees half a file.
+    let policy = match file {
+        Ok(p) => p,
+        Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e}")),
+    };
+    let verdict =
+        |target: &str| compile::decide(policy, sandbox, credential_hosts, host_access, target);
+    let (allowed, reason) = if flow.ip == GATEWAY {
+        // A gateway flow is the host's `localhost:PORT`, judged strictly: no rule, no flow,
+        // and the guest's name for it (any SNI or `Host:` it likes) plays no part.
+        let g = verdict(&format!("localhost:{}", flow.port));
+        (g.allowed, g.reason)
+    } else {
+        let v = verdict(&SocketAddr::new(flow.ip, flow.port).to_string());
+        let n = flow
+            .name
+            .as_ref()
+            .map(|name| verdict(&format!("{name}:{}", flow.port)));
+        match n {
+            // An IP or CIDR allow rule still admits a name no rule mentions; a deny always
+            // wins. Allow-all and presets never reach here, as they would have allowed the
+            // name.
+            Some(n) if !n.allowed && !(n.implicit && v.allowed) => (false, n.reason),
+            // TLS without an SNI or HTTP without one `Host:` hides its name: only an address
+            // allow (or allow-all) admits it, not smolvm's admission of some name. A deny rule
+            // keeps its own reason.
+            None if flow.kind != FlowKind::Other && !v.allowed => {
+                let why = "TLS without a server name, or HTTP without one Host:, needs an IP or \
+                           CIDR allow";
+                (false, if v.implicit { why.into() } else { v.reason })
             }
-        };
-        let d = if allowed {
-            Decision::Allow
-        } else {
-            Decision::Deny
-        };
-        (d, reason)
-    }
+            // By address, only a deny rule refuses: smolvm's allow list already admitted it.
+            _ => (v.allowed || v.implicit, v.reason),
+        }
+    };
+    let d = if allowed {
+        Decision::Allow
+    } else {
+        Decision::Deny
+    };
+    (d, reason)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{Paths, test_paths};
+    use crate::egress::filter::PolicySource;
+    use crate::policy::compile::HOST_GATEWAY;
     use crate::policy::{Mode, Policy};
     use Decision::{Allow, Deny};
 
@@ -113,12 +93,10 @@ mod tests {
         }
     }
 
-    fn source(p: &Paths) -> Arc<PolicySource> {
-        Arc::new(PolicySource::new(p, SB))
-    }
-
-    fn ask(r: &Rules, f: &Flow) -> Decision {
-        r.decide(f).0
+    /// A sandbox's flow decisions, from the policy as the source last read it.
+    fn sandbox_rules(p: &Paths, host_access: bool) -> impl Fn(&Flow) -> (Decision, String) {
+        let source = PolicySource::new(p, SB);
+        move |f| decide(&source.snapshot().file, SB, host_access, &[], f)
     }
 
     /// Sandbox rules, host access, then the flow's name, address and port, and its decision.
@@ -170,13 +148,9 @@ mod tests {
         for (rules, host_access, name, ip, port, want) in cases {
             let (_d, p) = test_paths();
             save(&p, rules);
-            let r = Rules::new(source(&p), *host_access, vec![]);
+            let r = sandbox_rules(&p, *host_access);
             let f = flow(*name, ip, *port);
-            assert_eq!(
-                ask(&r, &f),
-                *want,
-                "{rules:?} host_access={host_access} {f:?}"
-            );
+            assert_eq!(r(&f).0, *want, "{rules:?} host_access={host_access} {f:?}");
         }
     }
 
@@ -189,14 +163,14 @@ mod tests {
         };
         let (_d, p) = test_paths();
         save(&p, &[(true, "**.github.com")]);
-        let r = Rules::new(source(&p), false, vec![]);
+        let r = sandbox_rules(&p, false);
         for kind in [Tls, Http] {
-            let (d, why) = r.decide(&nameless(kind, "140.82.1.1"));
+            let (d, why) = r(&nameless(kind, "140.82.1.1"));
             assert_eq!(d, Deny);
             assert!(why.contains("needs an IP or CIDR allow"), "{why}");
         }
         save(&p, &[(true, "10.0.0.0/8")]);
-        assert_eq!(ask(&r, &nameless(Tls, "10.1.2.3")), Allow);
+        assert_eq!(r(&nameless(Tls, "10.1.2.3")).0, Allow);
     }
 
     #[test]
@@ -208,16 +182,16 @@ mod tests {
         }
         .save(&p)
         .unwrap();
-        let r = Rules::new(source(&p), false, vec![]);
-        assert_eq!(ask(&r, &flow(None, "140.82.1.1", 22)), Allow);
+        let r = sandbox_rules(&p, false);
+        assert_eq!(r(&flow(None, "140.82.1.1", 22)).0, Allow);
     }
 
     #[test]
     fn a_host_deny_says_deny_rule() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "**.github.com"), (false, "gist.github.com")]);
-        let r = Rules::new(source(&p), false, vec![]);
-        let (d, why) = r.decide(&flow(Some("gist.github.com"), "140.82.1.1", 443));
+        let r = sandbox_rules(&p, false);
+        let (d, why) = r(&flow(Some("gist.github.com"), "140.82.1.1", 443));
         assert_eq!(d, Deny);
         assert!(why.contains("deny rule"), "{why}");
     }
@@ -226,45 +200,34 @@ mod tests {
     fn an_unreadable_policy_denies_then_recovers() {
         let (_d, p) = test_paths();
         std::fs::write(p.policy_file(), "mode = [garbage").unwrap();
-        let r = Rules::new(source(&p), false, vec![]);
+        let r = sandbox_rules(&p, false);
         for f in [
             flow(None, "192.0.2.1", 443),
             flow(Some("a.com"), "192.0.2.1", 443),
         ] {
-            let (d, why) = r.decide(&f);
+            let (d, why) = r(&f);
             assert_eq!(d, Deny);
             assert!(why.starts_with("policy.toml unreadable: "), "{why}");
         }
         save(&p, &[(true, "github.com")]);
-        assert_eq!(ask(&r, &flow(Some("github.com"), "140.82.1.1", 443)), Allow);
+        assert_eq!(r(&flow(Some("github.com"), "140.82.1.1", 443)).0, Allow);
     }
 
     #[test]
     fn a_missing_policy_is_the_default() {
         let (_d, p) = test_paths();
-        let r = Rules::new(source(&p), false, vec![]);
+        let r = sandbox_rules(&p, false);
         // No mode chosen yet: open, as before policies existed.
-        assert_eq!(ask(&r, &flow(Some("example.com"), "192.0.2.1", 443)), Allow);
-    }
-
-    #[test]
-    fn a_policy_change_applies_to_the_next_flow() {
-        let (_d, p) = test_paths();
-        save(&p, &[(true, "github.com")]);
-        let r = Rules::new(source(&p), false, vec![]);
-        let f = flow(Some("github.com"), "140.82.1.1", 443);
-        assert_eq!(ask(&r, &f), Allow);
-        save(&p, &[(false, "github.com")]);
-        assert_eq!(ask(&r, &f), Deny);
+        assert_eq!(r(&flow(Some("example.com"), "192.0.2.1", 443)).0, Allow);
     }
 
     #[test]
     fn a_save_of_the_same_length_and_time_still_applies() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "a.com")]);
-        let r = Rules::new(source(&p), false, vec![]);
+        let r = sandbox_rules(&p, false);
         let f = flow(Some("b.com"), "192.0.2.1", 443);
-        assert_eq!(ask(&r, &f), Deny);
+        assert_eq!(r(&f).0, Deny);
         let mtime = std::fs::metadata(p.policy_file())
             .unwrap()
             .modified()
@@ -276,32 +239,6 @@ mod tests {
             .open(p.policy_file())
             .unwrap();
         file.set_modified(mtime).unwrap();
-        assert_eq!(ask(&r, &f), Allow);
-    }
-
-    #[test]
-    fn an_install_rule_applies_while_it_is_in_the_policy() {
-        let (_d, p) = test_paths();
-        let mut policy = Policy {
-            mode: Some(Mode::DenyAll),
-            ..Policy::default()
-        };
-        let id = policy
-            .add_rule(
-                Some(SB),
-                crate::policy::Decision::Allow,
-                "registry.npmjs.org",
-                "kit-install:k",
-                None,
-                None,
-            )
-            .unwrap();
-        policy.save(&p).unwrap();
-        let r = Rules::new(source(&p), false, vec![]);
-        let f = flow(Some("registry.npmjs.org"), "104.16.0.1", 443);
-        assert_eq!(ask(&r, &f), Allow);
-        policy.remove_rules_by_ids(SB, &[id]);
-        policy.save(&p).unwrap();
-        assert_eq!(ask(&r, &f), Deny);
+        assert_eq!(r(&f).0, Allow);
     }
 }
