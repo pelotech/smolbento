@@ -41,7 +41,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     // As `provision::ensure_running` does, with the plan already made.
     provision::sweep_orphans(ctx);
     provision::refresh_services(ctx, &parent);
+    let was_stopped = !parent.is_running();
+    if was_stopped {
+        provision::before_start(ctx, &parent)?;
+    }
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
+    if was_stopped {
+        for w in provision::egress_warnings(ctx, parent.name()) {
+            crate::warning!("{w}");
+        }
+    }
     for n in &names {
         fork_one(ctx, &parent, n, &start)
             .with_context(|| format!("forking {} as {n}", parent.name()))?;
@@ -709,6 +718,38 @@ mod tests {
         let label = egress::prepare(&t.ctx.paths, "a", &creds).unwrap().label;
         parent(t, "running", &[("sbx.egress", &label.to_label())]);
         label
+    }
+
+    #[test]
+    fn forking_a_stopped_hosted_parent_restarts_its_egress() {
+        let mut t = test_env(&[]);
+        let (ctl, _tmp) = with_services(&mut t);
+        let label = egress::prepare(&t.ctx.paths, "a", &[]).unwrap().label;
+        parent(
+            &t,
+            "stopped",
+            &[("sbx.egress", &label.to_label()), ("sbx.service", "true")],
+        );
+        t.sbt(&["fork", "a"]).unwrap();
+        assert!(
+            ctl.calls()
+                .contains(&"restart dev.smolbento.ns1.a.egress".to_string()),
+            "{:?}",
+            ctl.calls()
+        );
+    }
+
+    #[test]
+    fn forking_a_running_parent_leaves_its_egress_alone() {
+        let mut t = test_env(&[]);
+        let (ctl, _tmp) = with_services(&mut t);
+        hosted_parent(&t);
+        t.sbt(&["fork", "a"]).unwrap();
+        assert!(
+            !ctl.calls().iter().any(|c| c.starts_with("restart")),
+            "{:?}",
+            ctl.calls()
+        );
     }
 
     const FORK_UNIT: &str = "load dev.smolbento.ns1.a-fork-1.egress";
