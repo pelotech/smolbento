@@ -279,7 +279,9 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
   - Paths and queries follow sbx (any case) for `bento policy` rules, and the kit spec (exact case)
     for kit rules.
   - A path is judged with its dot segments resolved. One with `%2f` or `%5c`, double encoding, `%u`,
-    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
+    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`. So is a
+    target with a `#` fragment, or an encoded control byte in the query (`?q=a%0Ab`). Such a request
+    to a ruled host is refused.
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
   bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
   bounded deny on `localhost` acts on the whole host port: host services aren't decrypted. A

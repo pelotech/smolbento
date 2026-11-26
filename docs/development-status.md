@@ -80,7 +80,8 @@ meanwhile.
   sandbox). Preferred: an OAuth sentinel mode upstream in smolvm.
 - **Request rules: the rest.** Hosted sandboxes enforce method, path and query rules
   ([Request rules](network-and-secrets.md#request-rules)). Still to do: closing the bypass there (a
-  spoofed name on a ruled host's address), plain HTTP filtered per request rather than
+  spoofed name on a ruled host's address, and a missing name where the address is allowed:
+  allow-all, or a CIDR allow covering a ruled host), plain HTTP filtered per request rather than
   refused, and request rules under `network.egress=smolvm`.
 - **Guest DNS upstream order.** Not yet checked: a name the first resolver refuses while a later one
   answers. No workaround; the e2e tests avoid such names.
