@@ -10,8 +10,8 @@ use smolvm_protocol::intercept::InterceptEndpoint;
 
 use crate::relay::{Decide, relay};
 
-/// A spliced flow holds 4 fds (two sockets and a clone of each), and a macOS launchd unit's soft limit is 256.
-const MAX_FLOWS: usize = 48;
+/// Flows in flight at once: about 6 fds per flow; the embedding process raises its fd limit to fit.
+const MAX_FLOWS: usize = 256;
 
 /// The flows in flight, up to a limit.
 struct Slots {

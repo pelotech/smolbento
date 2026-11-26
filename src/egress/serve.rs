@@ -11,8 +11,46 @@ use anyhow::{Context, Result, bail};
 use egress_front::{Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, serve};
 use std::sync::Arc;
 
+/// macOS's per-process cap (`OPEN_MAX`); setrlimit refuses a soft limit above it.
+const FD_CAP: u64 = 10240;
+
+/// The soft fd limit to ask for: raised to `min(hard, FD_CAP)`, never lowered.
+fn wanted_soft(soft: u64, hard: u64) -> Option<u64> {
+    let want = hard.min(FD_CAP);
+    (want > soft).then_some(want)
+}
+
+/// Room for 256 decrypted flows at about 6 fds each (the unit's soft limit may be 256).
+fn raise_fd_limit() {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `lim` is a valid rlimit for the call to fill or read.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            eprintln!(
+                "egress: reading the fd limit: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        let Some(want) = wanted_soft(lim.rlim_cur, lim.rlim_max) else {
+            return;
+        };
+        lim.rlim_cur = want;
+        if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+            eprintln!(
+                "egress: raising the fd limit: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+}
+
 /// Serves the unit's activated listener until the process is stopped.
 pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
+    raise_fd_limit();
     let Some(listener) = activated_listener()? else {
         bail!("_serve egress runs only under its unit");
     };
@@ -125,6 +163,14 @@ fn decode_token(hex: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_soft_fd_limit_rises_to_the_hard_limit_or_the_cap() {
+        assert_eq!(wanted_soft(256, u64::MAX), Some(FD_CAP));
+        assert_eq!(wanted_soft(256, 4096), Some(4096));
+        assert_eq!(wanted_soft(4096, 4096), None);
+        assert_eq!(wanted_soft(20000, u64::MAX), None);
+    }
     use egress_front::CredentialResolver;
 
     fn ask(r: &StaticResolver, binding: &str) -> bool {

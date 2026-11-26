@@ -298,7 +298,7 @@ On a ruled host:
 - **Replies are asked for uncompressed** (`Accept-Encoding: identity`). One compressed anyway is
   decoded if it's gzip or deflate, up to 64 MiB. A br or zstd reply, or a larger one, gets `502`.
 - **WebSocket:** the upgrade request is judged. The frames after it pass unfiltered.
-- **At most 256 decrypted connections at once** per sandbox.
+- **At most 256 decrypted connections at once** per sandbox. Connections beyond that are refused.
 - **Plain HTTP is refused** (a reset, logged as `plain HTTP to a host with request rules`). The
   egress process can't judge it per request yet: use HTTPS.
 - **Other protocols pass** a host with only bounded denies, as in sbx: SSH to `github.com` still

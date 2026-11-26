@@ -2,7 +2,7 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smolvm_protocol::intercept::{InterceptEndpoint, VERDICT_CONNECTED};
 use smolvm_protocol::sni::{MAX_CLIENT_HELLO, Peek, peek_client_hello};
@@ -134,6 +134,7 @@ fn relay_with_timeout(
 /// the end of HTTP headers is in, nothing more arrives for `FIRST_BYTES_IDLE`, the guest closes, or
 /// `MAX_CLIENT_HELLO` bytes. Empty when nothing came.
 fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Vec<u8>> {
+    let deadline = Instant::now() + wait;
     guest.set_read_timeout(Some(wait))?;
     let mut first = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -161,7 +162,11 @@ fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Ve
         // A request line still coming may pause as long as the first bytes may: cut short, it
         // would have no name.
         let idle = if request_line_pending(head) {
-            wait
+            // One deadline for the whole wait: a trickle can't restart it.
+            match deadline.checked_duration_since(Instant::now()) {
+                Some(left) if !left.is_zero() => left,
+                _ => break,
+            }
         } else {
             FIRST_BYTES_IDLE
         };
@@ -188,6 +193,7 @@ mod tests {
     use super::*;
     use crate::name::client_hello;
     use std::net::TcpListener;
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
     fn allow() -> Decide {
@@ -491,8 +497,48 @@ mod tests {
         // The ClientHello's random field: `\n\n` there must not end a TLS read early.
         hello[11..13].copy_from_slice(b"\n\n");
         let parts: [&[u8]; 2] = [&hello[..13], &hello[13..]];
-        let seen = guest_sends(443, &parts, Duration::from_millis(50), b"ok");
+        let seen = guest_sends(443, &parts, Duration::from_millis(15), b"ok");
         assert_eq!(seen[1].name.as_deref(), Some("api.example.com"));
+    }
+
+    #[test]
+    fn a_guest_trickling_a_request_line_is_cut_off_by_the_total_deadline() {
+        let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
+        let fake = std::thread::spawn(move || {
+            let (mut s, _) = inner_l.accept().unwrap();
+            inner.read_preamble(&mut s).unwrap();
+            s.write_all(&[VERDICT_CONNECTED]).unwrap();
+            let _ = s.read_to_end(&mut Vec::new());
+        });
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        // Allow the destination decide, refuse the one on the first bytes.
+        let (decide, _) = recording(move |_| calls.fetch_add(1, Ordering::SeqCst) > 0);
+        let (mut client, server_side) = pair();
+        client.set_nodelay(true).unwrap();
+        let handshake = Duration::from_millis(400);
+        let start = std::time::Instant::now();
+        let r = std::thread::spawn(move || {
+            let r = relay_with_timeout(server_side, &front, &inner, &decide, handshake);
+            (r, start.elapsed())
+        });
+        client
+            .write_all(&front.preamble("1.2.3.4:80".parse().unwrap()))
+            .unwrap();
+        client.read_exact(&mut [0u8; 1]).unwrap();
+        client.write_all(b"GET ").unwrap();
+        // A byte every 100 ms would keep a per-read timeout alive for the whole 3 s.
+        while start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(100));
+            if client.write_all(b"a").is_err() {
+                break;
+            }
+        }
+        let (res, took) = r.join().unwrap();
+        drop(client);
+        fake.join().unwrap();
+        assert!(res.is_ok());
+        assert!(took < Duration::from_secs(1), "{took:?}");
     }
 
     #[test]

@@ -137,7 +137,7 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     if sb.is_running() {
         return sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta));
     }
-    before_start(ctx, sb)?;
+    before_start(ctx, sb);
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
     for w in egress_warnings(ctx, sb.name()) {
         crate::warning!("{w}");
@@ -147,10 +147,9 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
 
 /// What a stopped sandbox needs before its start: the stale unresolved-secrets list removed
 /// (the restarted process writes a new one) and its egress process restarted.
-pub(crate) fn before_start<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+pub(crate) fn before_start<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     let _ = std::fs::remove_file(crate::egress::unresolved_file(&ctx.paths, sb.name()));
     restart_egress(ctx, sb);
-    Ok(())
 }
 
 /// What the egress process of `sandbox` reported it couldn't resolve, as warnings. Read without

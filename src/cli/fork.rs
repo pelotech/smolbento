@@ -43,7 +43,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     provision::refresh_services(ctx, &parent);
     let was_stopped = !parent.is_running();
     if was_stopped {
-        provision::before_start(ctx, &parent)?;
+        provision::before_start(ctx, &parent);
     }
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     if was_stopped {
