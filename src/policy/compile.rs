@@ -406,7 +406,7 @@ fn is_host_loopback(host: &str) -> bool {
         || host == HOST_GATEWAY
         || host
             .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+            .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 /// sbx semantics: bound secrets, then deny rules, then the mode, allow rules and the preset. The

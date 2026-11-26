@@ -819,3 +819,15 @@ fn an_unmapped_request_allow_denies_its_host() {
     let v = decided(&p, false, "h.com:443");
     assert!(!v.allowed && !v.implicit, "{}", v.reason);
 }
+
+/// smolvm matches an IPv4 rule against the IPv4-mapped IPv6 form too, so a deny can't be
+/// bypassed by spelling, and neither can the host loopback.
+#[test]
+fn ipv4_mapped_addresses_match_like_their_ipv4_form() {
+    let mut p = policy(Mode::AllowAll);
+    let cidr = p.deny(None, "10.0.0.0/8");
+    let v = check(&p, Some("s1"), &[], None, "[::ffff:10.1.2.3]:443");
+    assert!(!v.allowed && v.reason.contains(&cidr), "{}", v.reason);
+    let v = check(&p, Some("s1"), &[], None, "[::ffff:127.0.0.1]:80");
+    assert!(!v.allowed, "{}", v.reason);
+}
