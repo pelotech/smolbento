@@ -1192,6 +1192,52 @@ fn mixin_context_is_dropped_when_the_workload_declares_no_agent_file() {
     assert!(!labels.contains_key("sbx.agent-context"), "nothing written");
 }
 
+#[test]
+fn a_profile_is_written_with_guidance_even_when_no_kit_has_a_body() {
+    // tck: agent-context@1/workload-filename-is-profile, agent-context@2/materialized
+    let p = agent_kit_plan("claude", "CLAUDE.md", vec![]);
+    let (steps, _) = run(&p, &mut in_workspace("/w/proj"), &mut Policy::default()).unwrap();
+    assert_eq!(steps.context, layout("/w/CLAUDE.md", &[], &[]));
+}
+
+#[test]
+fn the_composed_context_is_warned_above_64_kib_and_refused_above_512_kib() {
+    // tck: agent-context@2/size-budget
+    let run_with = |len: usize| {
+        let w = context_workload(&[(2, false)], &"x".repeat(len));
+        let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+        run(&p, &mut in_workspace("/w/proj"), &mut Policy::default()).map(|_| ())
+    };
+    run_with(64 * 1024 + 1).unwrap(); // warns, never truncates
+    let e = run_with(512 * 1024 + 1).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("over the 524288 byte budget"),
+        "{e:#}"
+    );
+    run_with(512 * 1024).unwrap();
+}
+
+#[test]
+fn a_required_profile_in_a_mounted_workspace_is_refused_and_an_optional_one_skipped() {
+    // tck: agent-context@2/profile-precedence: required when an ask naming it is.
+    for (optional, refused) in [(false, true), (true, false)] {
+        let w = with(
+            workload(),
+            "agent-context@2",
+            optional,
+            context(Some("/w/proj/.ctx"), Some("AGENTS.md"), "b"),
+        );
+        let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+        let r = run(&p, &mut in_workspace("/w/proj"), &mut Policy::default());
+        if refused {
+            let e = r.unwrap_err();
+            assert!(format!("{e:#}").contains("/w/proj/.ctx/AGENTS.md"), "{e:#}");
+        } else {
+            assert!(r.unwrap().0.context.is_empty());
+        }
+    }
+}
+
 /// A workload offering `text` under the given `(version, optional)` requests.
 fn context_workload(offers: &[(u8, bool)], text: &str) -> Kit {
     offers.iter().fold(workload(), |w, (version, optional)| {
@@ -1365,10 +1411,9 @@ fn a_mounted_agent_file_gets_no_warning_when_no_kit_has_text() {
 
 #[test]
 fn a_mounted_agent_file_is_skipped_and_the_others_written() {
-    let mixins = vec![
-        agent_mixin(2, "a", "/w/proj/.a", "A.md", "use a"),
-        agent_mixin(2, "b", "/home/agent/.b", "B.md", "use b"),
-    ];
+    let mut a = agent_mixin(2, "a", "/w/proj/.a", "A.md", "use a");
+    a.caps[0].optional = true; // a required one in a mount is refused
+    let mixins = vec![a, agent_mixin(2, "b", "/home/agent/.b", "B.md", "use b")];
     let (steps, _) = run(
         &plan(mixins),
         &mut in_workspace("/w/proj"),
@@ -1495,11 +1540,9 @@ fn a_recorded_agent_file_wins() {
 
 #[test]
 fn context_is_never_written_into_a_mounted_workspace() {
-    let p = agent_kit_plan(
-        "claude",
-        "CLAUDE.md",
-        vec![context_mixin("m", Source::Local("/k/m".into()), "b")],
-    );
+    let mut m = context_mixin("m", Source::Local("/k/m".into()), "b");
+    m.caps[0].optional = true; // a required one in a mount is refused
+    let p = agent_kit_plan("claude", "CLAUDE.md", vec![m]);
     let mut req = in_workspace("/w/proj");
     req.workspaces.push(crate::workspace::Workspace {
         path: "/w".into(),

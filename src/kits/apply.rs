@@ -774,6 +774,10 @@ fn upper_env(service: &str) -> String {
         .collect()
 }
 
+/// SPEC agent-context@2/size-budget: warn above 64 KiB, refuse above 512 KiB.
+const CONTEXT_WARN_BYTES: usize = 64 * 1024;
+const CONTEXT_MAX_BYTES: usize = 512 * 1024;
+
 /// The agent file's name for a workload kit's `agent-context` without a `filename`.
 const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
@@ -890,6 +894,8 @@ fn profile_path(kit: &str, dir: &str, name: Option<&str>) -> Result<String> {
 /// where each kit's text is, for the agent to read when it needs it (SPEC
 /// agent-context@1/progressive-surfacing, @2/delivery). A `contentFile` (`@1`) is listed where the
 /// kit image has it; other text is written to `<dir>/kits-agent-context/<kit>.md` first.
+/// A profile is written whenever a kit asks for one, with the runtime's guidance even if no kit has
+/// text (SPEC agent-context@1/workload-filename-is-profile).
 fn context_scripts(
     workload: &str,
     version: Option<u8>,
@@ -897,9 +903,21 @@ fn context_scripts(
     agent_files: &[String],
     mounts: &[&Path],
 ) -> Result<Vec<String>> {
+    let asks = contexts;
     let has_body =
         |c: &&&KitContext| !c.req.content.trim().is_empty() || c.req.content_file.is_some();
-    let contexts: Vec<&&KitContext> = contexts.iter().filter(has_body).collect();
+    let contexts: Vec<&&KitContext> = asks.iter().filter(has_body).collect();
+    // SPEC agent-context@2/size-budget. shortcut: the bodies' bytes stand for the serialized
+    // descriptor, which smolbento never builds; upgrade if the descriptor's own overhead matters.
+    let size: usize = contexts.iter().map(|c| c.req.content.len()).sum();
+    if size > CONTEXT_MAX_BYTES {
+        bail!("agent context is {size} bytes, over the {CONTEXT_MAX_BYTES} byte budget");
+    }
+    if size > CONTEXT_WARN_BYTES {
+        crate::kit_warning!(
+            "agent context is {size} bytes; the advisory budget is {CONTEXT_WARN_BYTES}"
+        );
+    }
     if agent_files.is_empty() {
         let mut told: Vec<&str> = Vec::new();
         for c in contexts.iter().filter(|c| c.kit != workload) {
@@ -913,9 +931,23 @@ fn context_scripts(
         }
         return Ok(Vec::new());
     }
-    if contexts.is_empty() {
+    // No kit asks for a profile (a `kit add` of a kit without agent context): nothing to write.
+    if asks.is_empty() {
         return Ok(Vec::new());
     }
+    // SPEC agent-context@2/profile-precedence: a profile is required when an ask naming it is, and
+    // an undirected ask counts toward the first.
+    let required = |i: usize, file: &str| {
+        asks.iter().any(|c| {
+            !c.optional
+                && match &c.req.directory {
+                    Some(d) => {
+                        profile_path(&c.kit, d, c.req.filename.as_deref()).is_ok_and(|p| p == file)
+                    }
+                    None => i == 0,
+                }
+        })
+    };
     let inline = |c: &KitContext| {
         version == Some(2) && (c.kit == workload || c.req.delivery == Delivery::Inline)
     };
@@ -925,10 +957,16 @@ fn context_scripts(
     let text = text.join("\n\n");
     let indexed: Vec<&&&KitContext> = contexts.iter().filter(|c| !inline(c)).collect();
     let mut scripts = Vec::new();
-    for file in agent_files {
+    for (i, file) in agent_files.iter().enumerate() {
         let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
         let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
         if mounts.iter().any(|m| Path::new(file).starts_with(m)) {
+            if required(i, file) {
+                bail!(
+                    "required agent context can't be written: {file} is in a mounted workspace, \
+                     outside the sandbox"
+                );
+            }
             crate::warning!(
                 "agent context not written: {file} is in a mounted workspace, outside the \
                  sandbox"

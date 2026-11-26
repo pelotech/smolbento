@@ -114,6 +114,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let caps = caps(d.capabilities)?;
     let name = name_from_source(&source)?;
     check_caps(&name, &caps)?;
+    check_mixin_profiles(&name, kind, &caps)?;
     // A build secret is no create-time input: left out, `--kit-arg` and references to it fail
     // as for an undeclared argument, and nothing exports it (SPEC-v3 §6/build-secret-no-expansion).
     let args = d
@@ -322,6 +323,21 @@ pub(crate) fn request(ty: String, optional: bool, config: Option<Value>) -> Resu
     })
 }
 
+/// SPEC agent-context@1 and @2 `filename`: without `directory`, workload kits only. Not for a v2
+/// kit, whose mixin `filename` is warned about and not used.
+pub(crate) fn check_mixin_profiles(kit: &str, kind: Kind, caps: &[Cap]) -> Result<()> {
+    for c in caps {
+        if let CapBody::AgentContext(r) = &c.body
+            && kind == Kind::Mixin
+            && r.filename.is_some()
+            && r.directory.is_none()
+        {
+            bail!("kit {kit}: a mixin's agent-context filename needs a directory");
+        }
+    }
+    Ok(())
+}
+
 /// The checks that span a kit's capabilities: when it loads, and again once `resolve` has
 /// expanded them.
 pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
@@ -338,6 +354,15 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
         }
     }
     check_ssh_phases(kit, caps)
+}
+
+/// `directory` needs a single-component `filename` in the same entry (SPEC agent-context@1 and @2).
+fn profile_dir_needs_filename(filename: &Option<String>, directory: &Option<String>) -> Result<()> {
+    let plain = |f: &str| !f.is_empty() && !f.contains('/') && f != "." && f != "..";
+    if directory.is_some() && !filename.as_deref().is_some_and(plain) {
+        bail!("agent-context directory needs a single-component filename in the same entry");
+    }
+    Ok(())
 }
 
 /// Decodes a known config type, rejecting unknown keys (the structs carry `deny_unknown_fields`).
@@ -456,6 +481,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             if c.content.is_some() && c.content_file.is_some() {
                 bail!("content and contentFile are mutually exclusive");
             }
+            profile_dir_needs_filename(&c.filename, &c.directory)?;
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
                 directory: c.directory,
@@ -474,6 +500,14 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     bail!("agent-context@2 delivery must be progressive or inline (got {d:?})")
                 }
             };
+            profile_dir_needs_filename(&c.filename, &c.directory)?;
+            // tck: agent-context@2/inline-only
+            if c.filename.is_none()
+                && c.directory.is_none()
+                && c.content.as_deref().is_none_or(str::is_empty)
+            {
+                bail!("agent-context@2 needs a profile (filename) or a nonempty content");
+            }
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
                 directory: c.directory,

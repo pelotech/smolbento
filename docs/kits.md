@@ -205,10 +205,14 @@ instructions (`kit.showWarnings` shows a warning). `kit add` keeps the sandbox's
 requires the other one needs a recreate. Declaring both versions with `optional: true` makes a kit
 follow the others, as the shipped kits and sbx's agents do.
 
-Text outside the markers is yours and is kept.
+Text outside the markers is yours and is kept. The section starts with a one-line note from
+smolbento (the sandbox's network rules apply, ask the user), and every file a kit's `agent-context`
+names gets it, even when no kit has text. The combined text warns above 64 KiB and is refused above
+512 KiB.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
-  a warning. When only `kits-agent-context` would, a kit with listed text is refused: the spec
+  a warning, or the create is refused when a required `agent-context` (not `optional: true`) asks
+  for it. When only `kits-agent-context` would, a kit with listed text is refused: the spec
   refuses it rather than putting the text in the file itself.
 - When no kit names a file and the workload kit declares no `agent-context`, mixin instructions are
   dropped (`kit.showWarnings` shows a warning).

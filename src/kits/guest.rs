@@ -325,6 +325,10 @@ pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
 pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
 pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
 
+/// The runtime's own guidance, which leads every profile's kits section (SPEC
+/// agent-context@1/workload-filename-is-profile, @2/materialized). One line, so a rewrite finds it.
+pub const RUNTIME_GUIDANCE: &str = "This session runs in a smolbento sandbox, an isolated VM. Outbound network access follows the sandbox's policy: a refused connection, or a 403 that names a rule, means the policy doesn't allow it. Ask the user instead of working around it.";
+
 /// Shell commands printing `bodies` one blank line apart.
 fn print_bodies(bodies: &[&str]) -> String {
     let mut s = String::new();
@@ -383,22 +387,28 @@ pub fn kits_section_script(file: &str, text: &str, entries: &[(String, String)])
     let lines: Vec<String> = lines.iter().map(|l| sh_quote(l)).collect();
     let f = sh_quote(file);
     format!(
-        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
+        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\n{print} > \"$s\"\n\
          new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
-         awk -v b={start} -v e={end} -v s=\"$s\" -v ne={ne} '{SECTION_AWK}' {f} > \"$t\"\n\
+         awk -v b={start} -v e={end} -v g={g} -v s=\"$s\" -v ne={ne} '{SECTION_AWK}' {f} > \"$t\"\n\
          cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
          [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
         mkdirs = mkdirs(file),
-        lines = lines.join(" "),
+        // No lines is an empty file: `printf '%s\n'` alone would write one blank line.
+        print = if lines.is_empty() {
+            ":".to_string()
+        } else {
+            format!("printf '%s\\n' {}", lines.join(" "))
+        },
         start = sh_quote(KITS_SECTION_START),
         end = sh_quote(KITS_SECTION_END),
+        g = sh_quote(RUNTIME_GUIDANCE),
         ne = entries.len(),
     )
 }
 
-/// Rewrites the kits section (markers `b` and `e`) from the file `s`: `ne` index lines, then the
-/// text's lines. Text outside the section stays; with no section, one is appended. The old index
-/// is the `## Kits` line and the entry lines that end the section.
+/// Rewrites the kits section (markers `b` and `e`) from the file `s`: the guidance line `g`, `ne`
+/// index lines, then the text's lines. Text outside the section stays; with no section, one is
+/// appended. The old index is the `## Kits` line and the entry lines that end the section.
 const SECTION_AWK: &str = r###"
 function key(l,  i) { i = index(substr(l, 5), "**"); return i ? substr(l, 1, i + 5) : l }
 function put(  i, j, k, c) {
@@ -407,7 +417,8 @@ function put(  i, j, k, c) {
   for (j = k - 1; j && keep[j] == ""; j--) ;
   for (i = k + 1; i <= m; i++) if (!(key(keep[i]) in new_kit)) ent[++c] = keep[i]
   for (i = 1; i <= n; i++) ent[++c] = add[i]
-  print b; for (i = 1; i <= j; i++) print keep[i]
+  print b; print g; if (j || t || c) print ""
+  for (i = 1; i <= j; i++) print keep[i]
   if (j && t) print ""; for (i = 1; i <= t; i++) print txt[i]
   if ((j || t) && c) print ""
   if (c) { print "## Kits"; for (i = 1; i <= c; i++) print ent[i] }
@@ -417,7 +428,9 @@ BEGIN { while ((getline l < s) > 0) {
   close(s) }
 $0 == b { inb = 1; next }
 inb && $0 == e { inb = 0; if (!done) put(); next }
-inb { keep[++m] = $0; next }
+inb && $0 == g { skip = 1; next }
+inb && skip && $0 == "" { skip = 0; next }
+inb { skip = 0; keep[++m] = $0; next }
 { print }
 END { if (!done) { if (NR && !inb) print ""; put() } }
 "###;

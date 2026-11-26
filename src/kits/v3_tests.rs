@@ -659,6 +659,63 @@ fn agent_context_delivery() {
     assert!(ctx("agent-context@1", r#","delivery":"inline""#).is_err());
 }
 
+/// tck: agent-context@2/inline-only, agent-context@1/directory-honored, and the specs' filename
+/// rules: an `@2` entry has a profile or a body, `directory` needs a single-component `filename`,
+/// and a mixin's `filename` needs a `directory`.
+#[test]
+fn agent_context_entries_are_validated() {
+    let load = |kind: &str, ty: &str, config: &str| {
+        let d = format!(
+            r#"{{"schemaVersion":"3","kind":"{kind}","capabilities":[{{"type":"com.docker.sandbox/{ty}","config":{config}}}]}}"#
+        );
+        parse(&d, local("t"))
+    };
+    for bad in [
+        ("workload", "agent-context@2", "{}"),
+        ("workload", "agent-context@2", r#"{"content":""}"#),
+        ("workload", "agent-context@2", r#"{"directory":"/d"}"#),
+        (
+            "workload",
+            "agent-context@1",
+            r#"{"directory":"/d","content":"x"}"#,
+        ),
+        (
+            "workload",
+            "agent-context@2",
+            r#"{"directory":"/d","filename":"a/b","content":"x"}"#,
+        ),
+        (
+            "mixin",
+            "agent-context@2",
+            r#"{"filename":"AGENTS.md","content":"x"}"#,
+        ),
+        (
+            "mixin",
+            "agent-context@1",
+            r#"{"filename":"AGENTS.md","content":"x"}"#,
+        ),
+    ] {
+        assert!(load(bad.0, bad.1, bad.2).is_err(), "{bad:?}");
+    }
+    for good in [
+        ("workload", "agent-context@2", r#"{"filename":"AGENTS.md"}"#),
+        ("workload", "agent-context@2", r#"{"content":"x"}"#),
+        (
+            "workload",
+            "agent-context@2",
+            r#"{"directory":"/d","filename":"A.md"}"#,
+        ),
+        (
+            "mixin",
+            "agent-context@2",
+            r#"{"directory":"/d","filename":"A.md","content":"x"}"#,
+        ),
+        ("mixin", "agent-context@2", r#"{"content":"x"}"#),
+    ] {
+        load(good.0, good.1, good.2).unwrap_or_else(|e| panic!("{good:?}: {e:#}"));
+    }
+}
+
 /// agent-sessions@2 is a declaration, like @1, and exclusive with it.
 #[test]
 fn agent_sessions_2_is_a_declaration_exclusive_with_1() {
