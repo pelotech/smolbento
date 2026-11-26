@@ -60,7 +60,7 @@ smolvm-pin version:
     set -euo pipefail
     lock=$(just _smolvm-lock {{version}})
     printf '%s\n' "$lock" > smolvm.lock
-    echo "pinned smolvm {{version}}; now run just smolvm-fork v{{version}} (add push if the fork has no tag for it yet)"
+    echo "pinned smolvm {{version}}; egress-front's fork tag needs no change unless it needs newer smolvm-credentials code"
 
 # Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
 smolvm-lock-check:

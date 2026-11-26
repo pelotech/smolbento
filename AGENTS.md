@@ -161,8 +161,9 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
 
 - Dev shell: `direnv allow` once (nix-direnv loads the flake). Shells without the direnv hook, such as
   agent tool shells, use `direnv exec . <cmd>`.
-- `crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork, made by `just smolvm-fork` (what the
-  tag is based on: the comment in the crate's `Cargo.toml`). A new tag updates the crate's `tag` and the flake hash.
+- `crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork, made by `just smolvm-fork BASE`
+  (the tag's name says its base). A smolvm bump doesn't need a new tag; one that egress-front needs newer
+  smolvm-credentials code for does, and it updates the crate's `tag` and the flake hash.
 - Fetching the smolvm git dependency may need `CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_LFS_SKIP_SMUDGE=1`: a user git
   config can rewrite https to ssh, and smolvm's repo carries ~800 MB of LFS the crate doesn't need.
 - Recipes: `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek),
