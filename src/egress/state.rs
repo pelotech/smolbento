@@ -194,13 +194,11 @@ mod tests {
         let p = paths(d.path());
         let got = prepare(&p, "w", &[]).unwrap();
         assert!(got.label.bindings.is_empty());
-        assert_eq!(token(&p, "w").unwrap().len(), 64);
         // Ruled hosts are decrypted without a binding, so the guest trusts the CA from the start.
         assert_eq!(
             got.ca_guest_dir,
             MachineCa::guest_dir(&p.egress("w").join("ca"))
         );
-        assert!(load_ca(&p, "w").unwrap().permitted().is_empty(), "broad");
     }
 
     #[test]

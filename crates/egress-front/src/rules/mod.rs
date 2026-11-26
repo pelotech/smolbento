@@ -11,17 +11,32 @@ use http::HeaderMap;
 pub use path::PathGlob;
 use path::View;
 
+use crate::Decision;
+
 /// A set of request rules, and what happens to a request on a host none of them names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub rules: Vec<Rule>,
-    pub default: Action,
+    pub default: Decision,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    Allow,
-    Deny,
+/// Why a request was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    /// The id of the deny rule that fired, if it has one. Unlike `message`, it never quotes the
+    /// request.
+    pub rule: Option<String>,
+    /// What to tell the guest.
+    pub message: String,
+}
+
+impl Refusal {
+    fn miss(message: impl Into<String>) -> Refusal {
+        Refusal {
+            rule: None,
+            message: message.into(),
+        }
+    }
 }
 
 /// One rule over the HTTP requests it matches.
@@ -29,7 +44,7 @@ pub enum Action {
 pub struct Rule {
     /// Named in a refusal.
     pub id: Option<String>,
-    pub action: Action,
+    pub action: Decision,
     pub host: HostMatch,
     /// `None` matches every port.
     pub port: Option<u16>,
@@ -87,13 +102,6 @@ pub enum Case {
     Sensitive,
 }
 
-/// Whether request rules apply to a connection, and what to do with it if its requests can't be read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Inspection {
-    None,
-    Inspect { uninspectable: Action },
-}
-
 /// Headers whose values are read as the request's method too.
 const METHOD_OVERRIDES: [&str; 3] = [
     "x-http-method-override",
@@ -105,55 +113,29 @@ impl Policy {
     /// Refuses a policy with a rule that could never match.
     pub fn validate(&self) -> Result<(), String> {
         for (i, r) in self.rules.iter().enumerate() {
-            let at = |why: &str| {
-                Err(format!(
+            r.validate().map_err(|why| {
+                format!(
                     "rule {}: {why}",
                     r.id.as_deref().map_or(i.to_string(), str::to_owned)
-                ))
-            };
-            if let HostMatch::Exact(n) | HostMatch::Subdomains { domain: n, .. } = &r.host
-                && (n.is_empty() || n.contains('*'))
-            {
-                return at("a host is empty or holds *");
-            }
-            if let Methods::Only(ms) = &r.request.methods
-                && (ms.is_empty()
-                    || ms.iter().any(|m| {
-                        m.is_empty()
-                            || !m
-                                .bytes()
-                                .all(|b| b.is_ascii_graphic() && !b.is_ascii_lowercase())
-                    }))
-            {
-                return at("methods must be non-empty uppercase tokens");
-            }
-            if r.request.query.iter().any(|q| q.name.is_empty()) {
-                return at("a query parameter has no name");
-            }
+                )
+            })?;
         }
         Ok(())
     }
 
-    /// Whether request rules apply to a connection to `host:port`. A host with an allow refuses what it
+    /// Whether request rules apply to a connection to `host:port`: `None` when none does, else what
+    /// to do with the connection if its requests can't be read. A host with an allow refuses what it
     /// can't inspect (an allow refuses everything it doesn't match); one with only denies passes it.
-    pub fn inspection(&self, host: &str, port: u16) -> Inspection {
+    pub fn inspection(&self, host: &str, port: u16) -> Option<Decision> {
         let host = normal(host);
         let mut named = false;
         for r in self.rules.iter().filter(|r| r.applies(&host, port)) {
-            if r.action == Action::Allow {
-                return Inspection::Inspect {
-                    uninspectable: Action::Deny,
-                };
+            if r.action == Decision::Allow {
+                return Some(Decision::Deny);
             }
             named = true;
         }
-        if named {
-            Inspection::Inspect {
-                uninspectable: Action::Allow,
-            }
-        } else {
-            Inspection::None
-        }
+        named.then_some(Decision::Allow)
     }
 
     /// Judges a request on `host:port`. `target` is its path and query as sent. A refusal says why:
@@ -165,7 +147,7 @@ impl Policy {
         method: &str,
         target: &str,
         headers: &HeaderMap,
-    ) -> Result<(), String> {
+    ) -> Result<(), Refusal> {
         let host = normal(host);
         let ruled: Vec<&Rule> = self
             .rules
@@ -173,26 +155,29 @@ impl Policy {
             .filter(|r| r.applies(&host, port))
             .collect();
         // A host no rule names isn't judged, so its encoded slashes (say, GitLab project paths) still pass.
-        if ruled.is_empty() && self.default == Action::Allow {
+        if ruled.is_empty() && self.default == Decision::Allow {
             return Ok(());
         }
-        let view = View::parse(target).ok_or("ambiguous request target")?;
+        let view = View::parse(target).ok_or_else(|| Refusal::miss("ambiguous request target"))?;
         let methods = method_views(method, headers);
         if let Some(r) = ruled
             .iter()
-            .find(|r| r.action == Action::Deny && r.matches(&methods, &view, false))
+            .find(|r| r.action == Decision::Deny && r.matches(&methods, &view, false))
         {
             return Err(r.refusal());
         }
         let mut allows = ruled
             .iter()
-            .filter(|r| r.action == Action::Allow)
+            .filter(|r| r.action == Decision::Allow)
             .peekable();
-        let unbounded = allows.peek().is_none() && self.default == Action::Allow;
+        let unbounded = allows.peek().is_none() && self.default == Decision::Allow;
         if unbounded || allows.any(|r| r.matches(&methods, &view, true)) {
             return Ok(());
         }
-        Err(format!("no rule allows {method} {} on {host}", view.path()))
+        Err(Refusal::miss(format!(
+            "no rule allows {method} {} on {host}",
+            view.path()
+        )))
     }
 
     /// The hosts an interceptor must terminate for these rules, in its `terminate_hosts` form, sorted.
@@ -215,6 +200,30 @@ impl Policy {
 }
 
 impl Rule {
+    /// Refuses a rule that could never match; the error says why.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if let HostMatch::Exact(n) | HostMatch::Subdomains { domain: n, .. } = &self.host
+            && (n.is_empty() || n.contains('*'))
+        {
+            return Err("a host is empty or holds *");
+        }
+        if let Methods::Only(ms) = &self.request.methods
+            && (ms.is_empty()
+                || ms.iter().any(|m| {
+                    m.is_empty()
+                        || !m
+                            .bytes()
+                            .all(|b| b.is_ascii_graphic() && !b.is_ascii_lowercase())
+                }))
+        {
+            return Err("methods must be non-empty uppercase tokens");
+        }
+        if self.request.query.iter().any(|q| q.name.is_empty()) {
+            return Err("a query parameter has no name");
+        }
+        Ok(())
+    }
+
     fn applies(&self, host: &str, port: u16) -> bool {
         self.port.is_none_or(|p| p == port) && self.host.matches(host)
     }
@@ -225,37 +234,24 @@ impl Rule {
         let m = &self.request;
         let method_ok = match &m.methods {
             Methods::Any => true,
-            Methods::Only(ms) => {
-                let hit = |v: &String| ms.iter().any(|m| m.eq_ignore_ascii_case(v));
-                if every {
-                    methods.iter().all(hit)
-                } else {
-                    methods.iter().any(hit)
-                }
-            }
+            Methods::Only(ms) => readings(methods.iter(), every, |v| {
+                ms.iter().any(|m| m.eq_ignore_ascii_case(v))
+            }),
         };
-        let query_ok =
-            |params: &Vec<(Vec<u8>, Vec<u8>)>| m.query.iter().all(|q| q.matches(params, ci, every));
         method_ok
-            && {
-                let path_ok = |segs: &Vec<String>| m.path.matches(segs, ci);
-                if every {
-                    view.paths.iter().all(path_ok)
-                } else {
-                    view.paths.iter().any(path_ok)
-                }
-            }
-            && if every {
-                view.readings.iter().all(query_ok)
-            } else {
-                view.readings.iter().any(query_ok)
-            }
+            && readings(view.paths.iter(), every, |segs| m.path.matches(segs, ci))
+            && readings(view.readings.iter(), every, |params| {
+                m.query.iter().all(|q| q.matches(params, ci, every))
+            })
     }
 
-    fn refusal(&self) -> String {
-        match &self.id {
-            Some(id) => format!("request denied by policy (rule {id})"),
-            None => "request denied by policy".into(),
+    fn refusal(&self) -> Refusal {
+        Refusal {
+            rule: self.id.clone(),
+            message: match &self.id {
+                Some(id) => format!("request denied by policy (rule {id})"),
+                None => "request denied by policy".into(),
+            },
         }
     }
 }
@@ -292,12 +288,13 @@ impl QueryMatch {
                 v.len() >= x.len() && same(&v[v.len() - x.len()..], x.as_bytes())
             }
         };
-        if every {
-            values.peek().is_some() && values.all(ok)
-        } else {
-            values.any(ok)
-        }
+        (!every || values.peek().is_some()) && readings(values, every, ok)
     }
+}
+
+/// Whether `f` holds for any item (a deny's reading) or, with `every`, for all of them.
+fn readings<T>(mut items: impl Iterator<Item = T>, every: bool, f: impl FnMut(T) -> bool) -> bool {
+    if every { items.all(f) } else { items.any(f) }
 }
 
 /// Lowercase, without one trailing dot.

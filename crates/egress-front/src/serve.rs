@@ -102,8 +102,9 @@ pub fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relay::Decision;
-    use crate::{Action, Case, HostMatch, Methods, PathGlob, Policy, RequestMatch, Rule, broad_ca};
+    use crate::{
+        Case, Decision, HostMatch, Methods, PathGlob, Policy, RequestMatch, Rule, broad_ca,
+    };
     use smolvm_credentials::{CredentialPolicy, RequestFilter, RequestInfo, StaticResolver};
     use smolvm_protocol::intercept::VERDICT_CONNECTED;
     use std::io::{Read, Write};
@@ -126,8 +127,10 @@ mod tests {
 
     impl RequestFilter for Rules {
         fn check(&self, r: &RequestInfo<'_>) -> Result<(), String> {
-            self.0
-                .request(r.host, r.port, r.method, r.target, r.headers)
+            (self
+                .0
+                .request(r.host, r.port, r.method, r.target, r.headers))
+            .map_err(|e| e.message)
         }
     }
 
@@ -212,7 +215,7 @@ mod tests {
         let policy = Policy {
             rules: vec![Rule {
                 id: Some("r1".into()),
-                action: Action::Deny,
+                action: Decision::Deny,
                 host: HostMatch::Exact(HOST.into()),
                 port: None,
                 request: RequestMatch {
@@ -222,7 +225,7 @@ mod tests {
                 },
                 case: Case::Insensitive,
             }],
-            default: Action::Allow,
+            default: Decision::Allow,
         };
         let ca = broad_ca("m").unwrap();
         let ca_pem = ca.certificate_pem().to_string();

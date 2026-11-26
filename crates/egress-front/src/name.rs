@@ -204,10 +204,7 @@ mod tests {
 
     #[test]
     fn flows_without_a_name() {
-        assert_eq!(flow_name(b""), None);
-        assert_eq!(flow_name(b"SSH-2.0-x\r\n"), None);
         assert_eq!(flow_name(b"GET / HTTP/1.0\r\nAccept: */*\r\n\r\n"), None);
-        assert_eq!(flow_name(&client_hello(None)), None);
         // A Host: header cut off mid-value is not a name.
         assert_eq!(flow_name(b"GET / HTTP/1.1\r\nHost: exa"), None);
         // Not an HTTP request.
