@@ -1,6 +1,7 @@
 //! From `create`/`run` options to a sandbox request: the agent or workload, workspaces, `--clone`,
 //! and the kit plan (load, pin args, order, resolve), with the `KITS` progress section.
 
+use crate::kits::registry::Pull;
 use anyhow::{Context, Result, bail};
 
 use super::progress::Progress;
@@ -250,7 +251,7 @@ pub(crate) fn kit_plan<R: Runner>(
     opts: &SandboxOpts,
     p: &Progress,
 ) -> Result<Plan> {
-    let mut kits = KitsSection::new(p, &req.name);
+    let mut kits = KitsSection::new(p, &req.name, Pull::from_flag(opts.pull.as_deref())?);
     let docker_enabled = ctx.settings.bool("docker.enabled")?;
     // A template's own mixins, and every recorded kit's args.
     let mut recorded: Vec<Kit> = Vec::new();
@@ -377,16 +378,19 @@ struct KitsSection<'a> {
     p: &'a Progress,
     /// The sandbox being created: its registry logins may be used for the pulls.
     sandbox: String,
+    /// `--pull`: when a cached kit tag is asked again.
+    pull: Pull,
     open: bool,
     /// Kits loaded without a fetch before the section opened.
     waiting: Vec<String>,
 }
 
 impl<'a> KitsSection<'a> {
-    fn new(p: &'a Progress, sandbox: &str) -> Self {
+    fn new(p: &'a Progress, sandbox: &str, pull: Pull) -> Self {
         Self {
             p,
             sandbox: sandbox.to_string(),
+            pull,
             open: false,
             waiting: Vec::new(),
         }
@@ -400,9 +404,9 @@ impl<'a> KitsSection<'a> {
         reference: &str,
         position: load::Position,
     ) -> Result<Kit> {
-        let sandbox = self.sandbox.clone();
+        let (sandbox, pull) = (self.sandbox.clone(), self.pull);
         self.fetch(reference, |before| {
-            load::fetch(ctx, reference, false, Some(&sandbox), position, before)
+            load::fetch(ctx, reference, pull, Some(&sandbox), position, before)
         })
     }
 
@@ -422,9 +426,9 @@ impl<'a> KitsSection<'a> {
 
     /// `load` for built-in agent `name`'s kit, shown by its `reference`.
     fn load_agent<R: Runner>(&mut self, ctx: &Ctx<R>, name: &str, reference: &str) -> Result<Kit> {
-        let sandbox = self.sandbox.clone();
+        let (sandbox, pull) = (self.sandbox.clone(), self.pull);
         self.fetch(reference, |before| {
-            load::agent(ctx, name, None, false, Some(&sandbox), before)
+            load::agent(ctx, name, None, pull, Some(&sandbox), before)
         })
     }
 

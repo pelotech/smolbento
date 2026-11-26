@@ -21,8 +21,6 @@ pub use secret::*;
 pub use skills::*;
 pub use template::*;
 
-use super::Unsupported;
-
 #[derive(Debug, Parser)]
 #[command(
     name = "bento",
@@ -265,7 +263,8 @@ pub struct SandboxOpts {
     /// Image to use instead of the agent's template
     #[arg(short = 't', long)]
     pub template: Option<String>,
-    /// Image pull policy: missing, or never with a saved template
+    /// Kit pull policy: always, missing, or never with a saved template [default: a cached kit's
+    /// tag is checked again once a day]
     #[arg(long)]
     pub pull: Option<String>,
     /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
@@ -334,16 +333,7 @@ impl SandboxOpts {
             "is a Docker Cloud option",
         )?;
         super::refuse(&[(self.profile.is_some(), "--profile")])?;
-        if let Some(p) = self
-            .pull
-            .as_deref()
-            .filter(|p| !matches!(*p, "missing" | "never"))
-        {
-            return Err(Unsupported(format!(
-                "--pull {p} is not implemented yet; smolvm pulls missing images"
-            ))
-            .into());
-        }
+        crate::kits::registry::Pull::from_flag(self.pull.as_deref())?;
         Ok(())
     }
 }

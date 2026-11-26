@@ -66,7 +66,8 @@ Each built-in agent is the kit sbx publishes for it, `docker.io/sbx/<agent>:late
 kit brings the agent's image, command, network rules, credential hosts, settings (for `claude`:
 the workspace trust and permission prompts, `--kit-arg model=…`, `--kit-arg reasoningEffort=…`),
 agent file and skills directory, so agents are set up as in sbx and stay current. The first create
-of an agent pulls its kit, which takes a minute or two; later creates use the kit cache.
+of an agent pulls its kit, which takes a minute or two; later creates use the kit cache, and ask
+the registry for a newer kit once a day (`--pull always` asks now, `--pull missing` never does).
 
 `-t <image>` keeps the agent's kit and replaces its image (sbx allows this only for `shell`); the
 image needs the kit's user (`agent`).
