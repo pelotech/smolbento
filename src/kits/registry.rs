@@ -50,23 +50,116 @@ const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 /// sbx's published kits set it to `"true"` when the image's Docker engine should start.
 const START_DOCKER_ANNOTATION: &str = "com.docker.sandboxes.start-docker";
 
-/// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
-/// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
-/// verified) pins the fetch to that manifest; the kit's source is still REF.
-pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
-    if let Some(kit) = cached(reference, digest, cache)? {
-        return Ok(kit);
+/// When a kit tag's last registry answer is asked again (`--pull`). A digest-pinned kit never is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pull {
+    /// Every time.
+    Always,
+    /// Once its answer is a day old.
+    #[default]
+    Daily,
+    /// Never while the kit it named is cached.
+    Missing,
+    /// Never: an uncached kit fails (the caller refuses before pulling).
+    Never,
+}
+
+impl Pull {
+    /// `Never` when `offline` (`--offline`, `--pull never`), else the default.
+    pub fn offline(offline: bool) -> Pull {
+        if offline { Pull::Never } else { Pull::Daily }
     }
+
+    /// The policy `--pull VALUE` asks for; none given is the default.
+    pub fn from_flag(value: Option<&str>) -> Result<Pull> {
+        Ok(match value {
+            None => Pull::Daily,
+            Some("always") => Pull::Always,
+            Some("missing") => Pull::Missing,
+            Some("never") => Pull::Never,
+            Some(other) => bail!("--pull takes always, missing or never, not {other}"),
+        })
+    }
+}
+
+/// How long a tag's answer stands under `Pull::Daily`.
+const TAG_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Fetches REF's manifest and config and its layers into the cache (callers ask `cached`
+/// first). A manifest without the kit descriptor annotation is a plain image and an error. A
+/// DIGEST (one a signature check verified) pins the fetch to that manifest; the kit's source is
+/// still REF. An unpinned REF's answer is remembered for `cached`.
+pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
     let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
-    let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
+    let fetched = fetch_ref(
+        pinned.as_deref().unwrap_or(reference),
+        cache,
+        true,
+        true,
+        logins,
+    )?;
+    let dir = build_layout(cache, &fetched.manifest, &fetched.digest, reference)?;
+    if digest.is_none() {
+        remember_tag(cache, reference, &fetched.digest)?;
+    }
     read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
-/// A pinned kit already in the cache, read with no registry call; `None` when unpinned or not
-/// cached. Layouts are named by manifest digest only, so the same content pulled from another
-/// repository answers too: identical bytes, recorded here under `reference`.
-pub fn cached(reference: &str, digest: Option<&str>, cache: &Path) -> Result<Option<Kit>> {
-    let Some(d) = digest else {
+/// Where REF's last answer is kept: one file per normalised ref, holding the manifest digest,
+/// its modification time when the registry was asked.
+fn tag_path(cache: &Path, reference: &str) -> Result<PathBuf> {
+    let whole = parse_ref(reference)?.whole();
+    Ok(cache
+        .join("tags")
+        .join(hex(&Sha256::digest(whole.as_bytes()))))
+}
+
+/// The digest REF's tag last answered, if `pull` lets it stand.
+fn remembered_tag(cache: &Path, reference: &str, pull: Pull) -> Result<Option<String>> {
+    let path = tag_path(cache, reference)?;
+    let fresh = |m: fs::Metadata| match pull {
+        Pull::Always => false,
+        // A time in the future (a clock that moved back) counts as stale.
+        Pull::Daily => {
+            (m.modified().ok().and_then(|t| t.elapsed().ok())).is_some_and(|e| e < TAG_TTL)
+        }
+        Pull::Missing | Pull::Never => true,
+    };
+    if !fs::metadata(&path).is_ok_and(fresh) {
+        return Ok(None);
+    }
+    let digest = fs::read_to_string(&path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok(hex_of(&digest).is_ok().then_some(digest))
+}
+
+/// Records DIGEST as REF's tag answer, now.
+fn remember_tag(cache: &Path, reference: &str, digest: &str) -> Result<()> {
+    let path = tag_path(cache, reference)?;
+    let dir = path.parent().expect("a tags dir");
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(digest.as_bytes())?;
+    persist(tmp, &path)
+}
+
+/// A pinned kit already in the cache, read with no registry call, or an unpinned one whose tag's
+/// last answer `pull` lets stand; `None` otherwise. Layouts are named by manifest digest only, so
+/// the same content pulled from another repository answers too: identical bytes, recorded here
+/// under `reference`.
+pub fn cached(
+    reference: &str,
+    digest: Option<&str>,
+    cache: &Path,
+    pull: Pull,
+) -> Result<Option<Kit>> {
+    let remembered = match digest {
+        Some(_) => None,
+        None => remembered_tag(cache, reference, pull)?,
+    };
+    let Some(d) = digest.or(remembered.as_deref()) else {
         return Ok(None);
     };
     let dir = cache.join("oci").join(hex_of(d)?);
@@ -851,15 +944,32 @@ pub(crate) mod fixtures {
     /// A plain image (no kit annotation) in the kit cache as `reference`, as `pull_image` leaves
     /// it; returns its layout directory.
     pub fn cached_image(cache: &Path, reference: &str, config_json: &str) -> PathBuf {
+        cache_layout(cache, reference, None, config_json).1
+    }
+
+    /// A kit with descriptor DESC in the kit cache as `reference`, as `pull` leaves it; returns
+    /// its digest.
+    pub fn cached_kit(cache: &Path, reference: &str, desc: &str) -> String {
+        cache_layout(cache, reference, Some(desc), "{}").0
+    }
+
+    /// An image (a kit with `desc`) in the kit cache as `reference`: its digest and layout dir.
+    fn cache_layout(
+        cache: &Path,
+        reference: &str,
+        desc: Option<&str>,
+        config_json: &str,
+    ) -> (String, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        let digest = oci_layout(tmp.path(), None, &[], config_json);
+        let digest = oci_layout(tmp.path(), desc, &[], config_json);
         fs::create_dir_all(store_dir(cache)).unwrap();
         for e in fs::read_dir(store_dir(tmp.path())).unwrap() {
             let data = fs::read(e.unwrap().path()).unwrap();
             put_bytes(cache, &sha256_digest(&data), &data).unwrap();
         }
         let manifest = fs::read(store_dir(tmp.path()).join(hex_of(&digest).unwrap())).unwrap();
-        build_layout(cache, &manifest, &digest, reference).unwrap()
+        let dir = build_layout(cache, &manifest, &digest, reference).unwrap();
+        (digest, dir)
     }
 
     /// `write_layout` with only the descriptor annotation, for tests.

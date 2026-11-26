@@ -44,7 +44,7 @@ smolbento-only:
 | `create/run --profile`, `policy ls --profile`, `template ls -a/--digests/--no-trunc`, `template save\|load --capture-mode/--description`, `secret set-custom --no-verify/--show-error/--refresh`, `mcp add --disable-http2/--skip-ssrf-check/--callback-port/--scope/--no-scope` | Not implemented |
 | `diagnose --upload` | Never: sbx sends the report to Docker support, and smolbento has no support service. Nothing is sent |
 | `tui` | Later |
-| `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
+| `--pull never` without a saved template ([Templates](#templates)) | Not implemented |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
 | `secret set-custom --placeholder` | Not supported: smolvm chooses the placeholder |
 | `secret rm --all-sandboxes` | Not implemented |
@@ -218,6 +218,7 @@ servers are written into the agent's own MCP config at create.
 | `save` of a sandbox created with `--static-mcp` | Not measured | Refused: a sandbox made from the template would list those servers without their secrets or network access |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
 | `--pull never` | Default for saved local snapshots; an uncached image fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template, whose kits must be in the kit cache; exit 2 otherwise |
+| `--pull` default, `always`, `missing` | Not measured | A cached kit's tag (`sbx/claude:latest`) is asked at the registry again once a day. `--pull always` asks every time; `--pull missing` doesn't while the kit is cached. A digest-pinned kit never asks |
 
 ## Environment files
 

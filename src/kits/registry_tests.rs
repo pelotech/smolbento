@@ -14,22 +14,86 @@ fn src() -> Source {
 #[test]
 fn a_cached_pinned_ref_loads_without_the_registry() {
     let cache = tempfile::tempdir().unwrap();
-    let tmp = tempfile::tempdir().unwrap();
-    let digest = fixtures::oci_layout(tmp.path(), Some(DESC), &[], "{}");
-    fs::create_dir_all(store_dir(cache.path())).unwrap();
-    for e in fs::read_dir(store_dir(tmp.path())).unwrap() {
-        let data = fs::read(e.unwrap().path()).unwrap();
-        put_bytes(cache.path(), &sha256_digest(&data), &data).unwrap();
-    }
-    let manifest = fs::read(store_dir(tmp.path()).join(hex_of(&digest).unwrap())).unwrap();
-    // Nothing listens on 127.0.0.1:1: only the cache can answer.
     let r = "127.0.0.1:1/acme/kit:1";
-    build_layout(cache.path(), &manifest, &digest, r).unwrap();
-    let k = pull(r, Some(&digest), cache.path(), Logins::none()).unwrap();
+    let digest = fixtures::cached_kit(cache.path(), r, DESC);
+    let k = cached(r, Some(&digest), cache.path(), Pull::Daily)
+        .unwrap()
+        .unwrap();
     assert_eq!(k.digest.as_deref(), Some(digest.as_str()));
     assert_eq!(k.source, Source::Registry(r.into()));
-    // Unpinned, it asks the registry.
-    assert!(pull(r, None, cache.path(), Logins::none()).is_err());
+    // Unpinned and never checked, it must ask the registry.
+    assert!(
+        cached(r, None, cache.path(), Pull::Daily)
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A kit cached as `r` and remembered as `r`'s answer `age` ago; returns its digest.
+fn kit_remembered_ago(cache: &Path, r: &str, age: std::time::Duration) -> String {
+    let digest = fixtures::cached_kit(cache, r, DESC);
+    remember_tag(cache, r, &digest).unwrap();
+    let f = fs::File::options()
+        .write(true)
+        .open(tag_path(cache, r).unwrap())
+        .unwrap();
+    f.set_modified(std::time::SystemTime::now() - age).unwrap();
+    digest
+}
+
+#[test]
+fn a_tag_checked_within_a_day_loads_without_the_registry() {
+    let cache = tempfile::tempdir().unwrap();
+    let r = "127.0.0.1:1/acme/kit:1";
+    let digest = kit_remembered_ago(cache.path(), r, std::time::Duration::from_secs(23 * 3600));
+    let k = cached(r, None, cache.path(), Pull::Daily).unwrap().unwrap();
+    assert_eq!(k.digest.as_deref(), Some(digest.as_str()));
+    assert_eq!(k.source, Source::Registry(r.into()));
+    // `--pull always` asks the registry anyway.
+    assert!(
+        cached(r, None, cache.path(), Pull::Always)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_tag_checked_over_a_day_ago_asks_again_unless_missing() {
+    let cache = tempfile::tempdir().unwrap();
+    let r = "127.0.0.1:1/acme/kit:1";
+    let digest = kit_remembered_ago(cache.path(), r, std::time::Duration::from_secs(25 * 3600));
+    assert!(
+        cached(r, None, cache.path(), Pull::Daily)
+            .unwrap()
+            .is_none()
+    );
+    // `--pull missing` takes any cached answer.
+    let k = cached(r, None, cache.path(), Pull::Missing)
+        .unwrap()
+        .unwrap();
+    assert_eq!(k.digest.as_deref(), Some(digest.as_str()));
+}
+
+#[test]
+fn a_remembered_tag_whose_kit_left_the_cache_asks_again() {
+    let cache = tempfile::tempdir().unwrap();
+    let r = "127.0.0.1:1/acme/kit:1";
+    let digest = kit_remembered_ago(cache.path(), r, std::time::Duration::ZERO);
+    fs::remove_dir_all(cache.path().join("oci").join(hex_of(&digest).unwrap())).unwrap();
+    assert!(
+        cached(r, None, cache.path(), Pull::Missing)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn one_tag_record_answers_every_spelling_of_the_ref() {
+    let cache = tempfile::tempdir().unwrap();
+    assert_eq!(
+        tag_path(cache.path(), "sbx/claude").unwrap(),
+        tag_path(cache.path(), "docker.io/sbx/claude:latest").unwrap()
+    );
 }
 
 #[test]
@@ -554,4 +618,14 @@ fn a_v2_layer_of_another_type_is_refused() {
         err.to_string(),
         format!("acme/k:1 is a v2 kit with a layer of type {media_type}")
     );
+}
+
+#[test]
+fn pull_flag_values() {
+    assert_eq!(Pull::from_flag(None).unwrap(), Pull::Daily);
+    assert_eq!(Pull::from_flag(Some("always")).unwrap(), Pull::Always);
+    assert_eq!(Pull::from_flag(Some("missing")).unwrap(), Pull::Missing);
+    assert_eq!(Pull::from_flag(Some("never")).unwrap(), Pull::Never);
+    let e = Pull::from_flag(Some("sometimes")).unwrap_err().to_string();
+    assert!(e.contains("always, missing or never"), "{e}");
 }

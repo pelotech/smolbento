@@ -42,7 +42,7 @@ Options:
           Image to use instead of the agent's template
 
       --pull <PULL>
-          Image pull policy: missing, or never with a saved template
+          Kit pull policy: always, missing, or never with a saved template [default: a cached kit's tag is checked again once a day]
 
       --clone
           Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote

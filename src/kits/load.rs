@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
+use crate::kits::registry::Pull;
 use crate::kits::registry_auth::Logins;
 use crate::kits::{registry, signers, smolfile, trust, v2, v3};
 use crate::provision::builder;
@@ -67,7 +68,8 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// reference would be pulled and a v3 source directory built (the builder pulls its base image),
 /// so both are refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
-    Ok(fetch(ctx, reference, offline, None, Position::Kit, &mut |_| {})?.0)
+    let pull = Pull::offline(offline);
+    Ok(fetch(ctx, reference, pull, None, Position::Kit, &mut |_| {})?.0)
 }
 
 /// Where a reference was given, which decides how a name without `./` is read (sbx 0.53).
@@ -108,14 +110,19 @@ fn with_logins<R: Runner, T>(
     f(Logins::new(&registries, &*ctx.store))
 }
 
-/// Pulls REF (calling `before` first); also returns whether that added no blob to the cache.
+/// Pulls REF (calling `before` first) unless `pull` lets the cache answer; also returns whether
+/// that added no blob to the cache.
 fn pull_noting(
     reference: &str,
     pin: Option<&str>,
     cache: &Path,
     logins: Logins,
+    pull: Pull,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
+    if let Some(kit) = registry::cached(reference, pin, cache, pull)? {
+        return Ok((kit, true));
+    }
     before(Fetch::Pull);
     let blobs = entries(&registry::store_dir(cache));
     let kit = registry::pull(reference, pin, cache, logins)?;
@@ -128,11 +135,12 @@ fn pull_noting(
 pub fn fetch<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
-    offline: bool,
+    pull: Pull,
     sandbox: Option<&str>,
     position: Position,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
+    let offline = pull == Pull::Never;
     let reference = alias(reference).unwrap_or(reference);
     let (mut kit, cached) = if let Some(kit) = builtin(reference) {
         (kit?, true)
@@ -152,7 +160,7 @@ pub fn fetch<R: Runner>(
                     None
                 };
                 let cache = ctx.paths.kit_cache();
-                pull_noting(&r, verified.as_deref(), &cache, logins, before)
+                pull_noting(&r, verified.as_deref(), &cache, logins, pull, before)
             })?,
             Located::V2(dir) => {
                 let spec = dir.join("spec.yaml");
@@ -182,7 +190,7 @@ pub fn agent<R: Runner>(
     ctx: &Ctx<R>,
     name: &str,
     pin: Option<&str>,
-    offline: bool,
+    pull: Pull,
     sandbox: Option<&str>,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
@@ -194,14 +202,14 @@ pub fn agent<R: Runner>(
         let kit = registry::read_layout(Path::new(&reference), source.clone())
             .with_context(|| format!("loading agent kit {reference}"))?;
         (kit, true)
-    } else if let Some(kit) = registry::cached(&reference, pin, &cache)? {
+    } else if let Some(kit) = registry::cached(&reference, pin, &cache, pull)? {
         (kit, true)
     } else {
-        if offline {
+        if pull == Pull::Never {
             bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
         }
         with_logins(ctx, sandbox, |logins| {
-            pull_noting(&reference, pin, &cache, logins, before)
+            pull_noting(&reference, pin, &cache, logins, pull, before)
                 .with_context(|| format!("pulling agent kit {reference}"))
         })?
     };
@@ -239,8 +247,9 @@ pub fn pinned<R: Runner>(
     }
     let base = unpinned(reference);
     let digest = (base != reference).then(|| &reference[base.len() + 1..]);
+    let pull = Pull::offline(offline);
     if let Some(name) = agent {
-        return self::agent(ctx, name, digest, offline, sandbox, before);
+        return self::agent(ctx, name, digest, pull, sandbox, before);
     }
     let path = Path::new(base);
     let require = ctx.settings.bool("kit.requireSignature")?;
@@ -256,7 +265,7 @@ pub fn pinned<R: Runner>(
                  needs the network); run without --pull never"
             );
         }
-        fetch(ctx, base, offline, sandbox, Position::Kit, before)?
+        fetch(ctx, base, pull, sandbox, Position::Kit, before)?
     } else {
         trust::check(&Source::Registry(base.into()), &ctx.settings)?;
         if require {
@@ -271,7 +280,7 @@ pub fn pinned<R: Runner>(
             })?;
         }
         let cache = ctx.paths.kit_cache();
-        match registry::cached(base, digest, &cache)? {
+        match registry::cached(base, digest, &cache, pull)? {
             Some(kit) => (kit, true),
             None if offline => {
                 bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it")
@@ -1046,9 +1055,14 @@ mod tests {
         );
         let fetched = |reference: &str| {
             let mut seen = Vec::new();
-            let (_, cached) = fetch(&t.ctx, reference, false, None, Position::Kit, &mut |f| {
-                seen.push(f)
-            })
+            let (_, cached) = fetch(
+                &t.ctx,
+                reference,
+                Pull::Daily,
+                None,
+                Position::Kit,
+                &mut |f| seen.push(f),
+            )
             .unwrap();
             (seen, cached)
         };
@@ -1151,9 +1165,16 @@ mod tests {
         fs::write(t.ctx.cwd.join("mykit/spec.yaml"), V2).unwrap();
         let e = kit_name(&t.ctx, "mykit").unwrap_err().to_string();
         assert!(e.contains("not a local path"), "{e}");
-        let e = fetch(&t.ctx, "mykit", false, None, Position::Agent, &mut |_| {})
-            .unwrap_err()
-            .to_string();
+        let e = fetch(
+            &t.ctx,
+            "mykit",
+            Pull::Daily,
+            None,
+            Position::Agent,
+            &mut |_| {},
+        )
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("not a local path"), "{e}");
     }
 
