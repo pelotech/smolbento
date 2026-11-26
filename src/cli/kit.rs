@@ -1,12 +1,15 @@
 //! `bento kit inspect|validate|add`.
 
+mod doc;
+mod mounts;
+
 use std::io::Write;
 
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::Ctx;
 use super::args::{Format, KitArgOpts, KitCmd, KitRefArgs, SignOpts};
-use super::kit_doc::Doc;
+
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Content, Format as KitFormat, ImageConfig, Kind, Kit, Source};
@@ -22,6 +25,7 @@ use crate::sandbox::{self, CreateRequest, KitPhase, Recorded, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 use crate::workspace::Workspace;
+use doc::Doc;
 
 /// The sandbox `kit inspect|validate` ask `may_host` about: there is none yet, and only an
 /// internal (`_`) name changes the answer, so a plain name stands in. A kit's name could be internal.
@@ -49,7 +53,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             signing,
         } => push(ctx, &directory, &reference, sign, &signing),
         KitCmd::Pull { reference, output } => pull(ctx, &reference, output.as_deref()),
-        KitCmd::Mounts(cmd) => super::kit_mounts::run(ctx, cmd),
+        KitCmd::Mounts(cmd) => mounts::run(ctx, cmd),
         KitCmd::Sign { reference, signing } => sign(ctx, &reference, &signing),
         KitCmd::Verify {
             reference,
@@ -754,5 +758,4 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
 }
 
 #[cfg(test)]
-#[path = "kit_tests.rs"]
 mod tests;

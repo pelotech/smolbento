@@ -885,5 +885,4 @@ fn capitalised(s: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "policy_tests.rs"]
 mod tests;

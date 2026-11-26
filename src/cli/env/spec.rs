@@ -4,8 +4,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{DiskSizes, EnvOverrideOpts, KitArgOpts, SandboxOpts};
 use crate::agents;
+use crate::cli::{DiskSizes, EnvOverrideOpts, KitArgOpts, SandboxOpts};
 use crate::env::file::{
     Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
 };
