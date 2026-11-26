@@ -101,9 +101,13 @@ pub(super) struct View {
 
 impl View {
     /// `None` for an ambiguous target: one that isn't origin-form, whose path holds an encoded `/` or `\`,
-    /// a `%` that isn't one valid escape (`%u`), invalid UTF-8 or a control character, or whose path or
-    /// query is still encoded once decoded (double encoding).
+    /// a `%` that isn't one valid escape (`%u`), invalid UTF-8 or a control character, or a `#` fragment,
+    /// or whose path or query is still encoded once decoded (double encoding) or decodes to a control
+    /// byte in a query key or value.
     pub fn parse(target: &str) -> Option<View> {
+        if target.contains('#') {
+            return None;
+        }
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let path = path.strip_prefix('/')?;
         let raw = path.as_bytes();
@@ -134,7 +138,11 @@ impl View {
         if query.contains(';') {
             readings.push(params(query, &['&']));
         }
-        if readings[0].iter().any(|(k, v)| encoded(k) || encoded(v)) {
+        let ctl = |b: &Vec<u8>| b.iter().any(|&c| c < 0x20 || c == 0x7f);
+        if readings[0]
+            .iter()
+            .any(|(k, v)| encoded(k) || encoded(v) || ctl(k) || ctl(v))
+        {
             return None;
         }
         Some(View { paths, readings })

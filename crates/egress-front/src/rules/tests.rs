@@ -230,8 +230,24 @@ fn confused_paths_never_reach_a_denied_path() {
 fn ambiguous_targets_are_refused() {
     let p = policy(vec![allow("h", &[], "/**")]);
     for target in [
-        "/a%2Fb", "/a%2fb", "/a%5cb", "/a%5Cb", "/%252e", "/%c0%af", "/a%00", "/%u002e", "/a%",
-        "/a%zz", "/a%+f", "/a\tb", "a", "*",
+        "/a%2Fb",
+        "/a%2fb",
+        "/a%5cb",
+        "/a%5Cb",
+        "/%252e",
+        "/%c0%af",
+        "/a%00",
+        "/%u002e",
+        "/a%",
+        "/a%zz",
+        "/a%+f",
+        "/a\tb",
+        "a",
+        "*",
+        "/admin#x",
+        "/?a=1#f",
+        "/?a=%00",
+        "/?a%0d%0a=1",
     ] {
         assert_eq!(
             check(&p, "GET", target).unwrap_err(),
@@ -251,6 +267,9 @@ fn ambiguous_targets_are_refused() {
         );
     }
     assert!(check(&p, "GET", "/?a=100%25").is_ok());
+    // Encoded spaces, `+` and UTF-8 in a query are ordinary.
+    assert!(check(&p, "GET", "/?q=a%20b+c").is_ok());
+    assert!(check(&p, "GET", "/?q=caf%C3%A9&r=é").is_ok());
     // A host no rule names isn't judged, so its encoded slashes pass.
     assert!(
         p.request("other", 443, "GET", "/g%2Fp", &HeaderMap::new())

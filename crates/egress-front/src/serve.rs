@@ -2,12 +2,52 @@
 
 use std::net::TcpListener;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use smolvm_credentials::{CredentialResolver, Interceptor, InterceptorConfig};
 use smolvm_protocol::intercept::InterceptEndpoint;
 
 use crate::relay::{Decide, relay};
+
+/// A spliced flow holds 4 fds (two sockets and a clone of each), and a macOS launchd unit's soft limit is 256.
+const MAX_FLOWS: usize = 48;
+
+/// The flows in flight, up to a limit.
+struct Slots {
+    used: AtomicUsize,
+    limit: usize,
+    full_logged: AtomicBool,
+}
+
+/// One flow's place; dropping it (the thread ending, even by panic) frees it.
+struct Slot(Arc<Slots>);
+
+impl Slots {
+    fn new(limit: usize) -> Self {
+        Slots {
+            used: AtomicUsize::new(0),
+            limit,
+            full_logged: AtomicBool::new(false),
+        }
+    }
+
+    fn take(this: &Arc<Slots>) -> Option<Slot> {
+        let taken = this
+            .used
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < this.limit).then_some(n + 1)
+            });
+        taken.ok().map(|_| Slot(this.clone()))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.used.fetch_sub(1, Ordering::AcqRel);
+        self.0.full_logged.store(false, Ordering::Relaxed);
+    }
+}
 
 /// Spawn the interceptor, then accept smolvm's per-flow connections on `listener` forever, relaying
 /// each on its own thread and letting through only the flows `decide` allows. Accept and relay errors
@@ -25,13 +65,22 @@ pub fn serve(
         addr: listener.local_addr()?,
         token: front_token,
     };
+    let slots = Arc::new(Slots::new(MAX_FLOWS));
     loop {
         match listener.accept() {
             Ok((guest, _)) => {
+                let Some(slot) = Slots::take(&slots) else {
+                    // Logged once until a flow ends, so a burst isn't a flood.
+                    if !slots.full_logged.swap(true, Ordering::Relaxed) {
+                        eprintln!("egress: at {MAX_FLOWS} flows, dropping new ones");
+                    }
+                    continue;
+                };
                 let decide = decide.clone();
                 // `thread::spawn` panics when the OS refuses a thread; that must drop one flow, not
                 // the process. The closure, and with it the guest's socket, is dropped on error.
                 let spawned = std::thread::Builder::new().spawn(move || {
+                    let _slot = slot;
                     // A bad or dropped flow is that flow's problem only; the log says why.
                     if let Err(e) = relay(guest, &front, &inner, &decide) {
                         eprintln!("egress: a flow was dropped: {e}");
@@ -61,6 +110,17 @@ mod tests {
     use std::net::{SocketAddr, TcpStream};
 
     const HOST: &str = "ruled.test";
+
+    #[test]
+    fn slots_cap_and_free() {
+        let slots = Arc::new(Slots::new(2));
+        let a = Slots::take(&slots);
+        let _b = Slots::take(&slots);
+        assert!(a.is_some());
+        assert!(Slots::take(&slots).is_none());
+        drop(a);
+        assert!(Slots::take(&slots).is_some());
+    }
 
     struct Rules(Policy);
 

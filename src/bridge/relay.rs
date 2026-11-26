@@ -247,6 +247,10 @@ fn replay_cmd(port: u16, method: &str, target: &str) -> String {
 /// The body is treated as text (smolvm's output is read as UTF-8): fine for callback pages.
 fn pass_through(guest: &str) -> Option<Vec<u8>> {
     let (head, body) = guest.split_once("\r\n\r\n")?;
+    // Only CRLF may break a line: a bare CR or LF would let a header smuggle in a second framing.
+    if head.replace("\r\n", "").contains(['\r', '\n', '\0']) {
+        return None;
+    }
     let mut lines = head.split("\r\n");
     let status = lines.next().filter(|l| l.starts_with("HTTP/"))?;
     let mut out = format!("{status}\r\n");
@@ -282,6 +286,18 @@ mod tests {
     use super::*;
     use std::io::Read;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn pass_through_refuses_bare_line_breaks_and_nul() {
+        for bad in [
+            "HTTP/1.1 200 OK\nX: 1\r\n\r\nhi",
+            "HTTP/1.1 200 OK\r\nX: 1\nContent-Length: 99\r\n\r\nhi",
+            "HTTP/1.1 200 OK\r\nX: a\0b\r\n\r\nhi",
+        ] {
+            assert!(pass_through(bad).is_none(), "{bad:?}");
+        }
+        assert!(pass_through("HTTP/1.1 200 OK\r\nX: 1\r\n\r\nhi").is_some());
+    }
     use std::process::Command;
     use std::sync::Mutex;
     use std::time::Duration;
