@@ -11,7 +11,7 @@ use crate::ctx::Ctx;
 use crate::kits::args::ArgValues;
 use crate::kits::load::{self, starts_with_syntax};
 use crate::kits::model::{Content, Kind, Kit, Source};
-use crate::kits::registry_auth;
+use crate::kits::registry::auth;
 use crate::kits::resolve::{Plan, resolve};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, Recorded, Sandbox, options};
@@ -58,14 +58,14 @@ fn is_auth_failure(lower: &str) -> bool {
 /// Numbers this process's builds, so concurrent builds get their own `/build/<n>`.
 static BUILDS: AtomicU32 = AtomicU32::new(0);
 
-/// Mints a pull token: (host, entry, password, repos). `registry_auth::pull_token`, or a fake.
+/// Mints a pull token: (host, entry, password, repos). `auth::pull_token`, or a fake.
 type Minter = fn(&str, &RegistryEntry, &str, &[String]) -> Result<String>;
 
 /// Builds the v3 kit directory `dir` and returns the OCI layout it produced, unpacked into the
 /// cache (`<cache>/built/<sha256 of the tar>`).
 #[tracing::instrument(name = "kit_build", skip_all, fields(dir = %dir.display()))]
 pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
-    build_with(ctx, dir, registry_auth::pull_token)
+    build_with(ctx, dir, auth::pull_token)
 }
 
 fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathBuf> {
@@ -77,7 +77,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
     let mut registries = SecretsFile::load(&ctx.paths)?.host_registries();
     // smolvm's `--credential` can't carry a port in HOST, and the builder's Docker Hub pulls
     // (the `docker/sandbox-kit` frontend) go to a host no descriptor names.
-    registries.retain(|r| !r.host.contains(':') && !registry_auth::is_docker_hub(&r.host));
+    registries.retain(|r| !r.host.contains(':') && !auth::is_docker_hub(&r.host));
     registries.sort_by(|a, b| a.host.cmp(&b.host));
     let hosts: Vec<String> = registries.iter().map(|r| r.host.clone()).collect();
     // Bound to the builder but given no token by this build (see `pull_tokens`).

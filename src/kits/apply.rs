@@ -10,7 +10,7 @@ use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, Delivery, Hook, Kit, Source};
-use crate::kits::registry_auth::Logins;
+use crate::kits::registry::auth::Logins;
 use crate::kits::resolve::{KitContext, KitCred, Merged, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;

@@ -10,11 +10,12 @@ use super::kit_doc::Doc;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Content, Format as KitFormat, ImageConfig, Kind, Kit, Source};
-use crate::kits::registry_auth::Logins;
+use crate::kits::registry::auth::Logins;
 use crate::kits::resolve::{
     NO_SANDBOX_WORKDIR, check_named_formats, mixing_format, resolve_for, supported,
 };
-use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
+use crate::kits::trust::signing;
+use crate::kits::{apply, artifact, capability, guest, load, registry};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::labels::{self, KitRecord};

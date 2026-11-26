@@ -327,7 +327,7 @@ impl Settings {
             crate::kits::trust::parse_allowed_sources(value)?;
         }
         if key == "kit.trustedSigners" {
-            crate::kits::signers::parse(value, false)?;
+            crate::kits::trust::signers::parse(value, false)?;
         }
         if key == "smolvm.image-cache-size" {
             parse_cache_size(value)?;

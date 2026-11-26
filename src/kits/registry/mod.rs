@@ -27,10 +27,11 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
-use crate::kits::registry_auth::Logins;
+use crate::kits::registry::auth::Logins;
 use crate::kits::{artifact, trust, v3};
 use crate::util::{block_on, hex, sha256_digest};
 
+pub mod auth;
 mod docker_auth;
 mod signature;
 
@@ -984,5 +985,4 @@ pub(crate) mod fixtures {
 }
 
 #[cfg(test)]
-#[path = "registry_tests.rs"]
 mod tests;

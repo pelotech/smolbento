@@ -9,8 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::kits::model::{Content, Kit};
+use crate::kits::registry::auth::Logins;
 use crate::kits::registry::{self, Layout, blob_digests, hex_of, persist, put_bytes, store_dir};
-use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::Plan;
 use crate::util::sha256_digest;
 
