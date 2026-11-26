@@ -1639,6 +1639,31 @@ fn a_new_service_is_bound_to_a_running_hosted_sandbox_live() {
     assert!(!t.calls().iter().any(|l| l.contains("x-secret")));
 }
 
+/// A hosted sandbox's egress process resolves the value itself, so binding a new service to it
+/// doesn't read the source here: a command source isn't run (nor 1Password asked).
+#[test]
+fn binding_a_hosted_sandbox_does_not_resolve_the_secret() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"\n");
+    let ctl = hosted(&mut t, "running");
+    let ran = t.ctx.paths.config.join("ran");
+    let cmd = format!("touch {}; echo v", ran.display());
+    t.sbt(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "x.example",
+        "--env",
+        "XTOK",
+        "--command",
+        &cmd,
+    ])
+    .unwrap();
+    assert!(t.stdout().contains("Applied to h1 now\n"), "{}", t.stdout());
+    assert_eq!(restarts(&ctl), 1);
+    assert!(!ran.exists(), "the command source ran");
+}
+
 #[test]
 fn a_new_service_waits_for_a_stopped_hosted_sandboxs_next_start() {
     let mut t = test_env(&[]);

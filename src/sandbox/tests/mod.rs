@@ -179,3 +179,22 @@ pub(super) fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
         },
     );
 }
+
+/// Commands that list sandboxes ask smolvm once, not once more per running sandbox: only `ls`
+/// shows ports.
+#[test]
+fn list_asks_smolvm_once() {
+    let t = crate::testutil::test_env(&[]);
+    t.sandboxes(&[
+        ("a", "running", &[]),
+        ("b", "running", &[]),
+        ("c", "stopped", &[]),
+    ]);
+    let names: Vec<String> = list(&t.ctx.vm)
+        .unwrap()
+        .iter()
+        .map(|s| s.name().to_string())
+        .collect();
+    assert_eq!(names, ["a", "b", "c"]);
+    assert_eq!(t.calls(), ["machine ls --json"]);
+}

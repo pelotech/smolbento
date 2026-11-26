@@ -21,17 +21,15 @@ fn get_missing_is_a_clear_error() {
 }
 
 #[test]
-fn list_skips_foreign_machines_and_adds_ports() {
+fn list_skips_foreign_machines() {
     let fake = FakeRunner::new();
     fake.ok(
         &["machine", "ls", "--json"],
         include_str!("../../../tests/fixtures/smolvm/ls.json"),
     );
-    fake.ok(&["machine", "status", "-n", "sbx-claude-myrepo"], STATUS);
     let list = list(&Smolvm::new(fake)).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].name(), "claude-myrepo");
-    assert_eq!(list[0].ports.len(), 1);
 }
 
 #[test]

@@ -359,9 +359,10 @@ fn explain_impact<R: Runner>(
     // external mode. A restart applies a new value, or a new service bound to its label.
     let (hosted_bound, bound): (Vec<_>, Vec<_>) =
         bound.into_iter().partition(|s| s.meta.egress.is_some());
-    // Read once for every sandbox: a --ref or --command source may prompt, or be slow.
+    // Read once for every sandbox: a --ref or --command source may prompt, or be slow. Binding a
+    // new service to a hosted sandbox doesn't need it.
     let new = match (
-        bound.iter().any(|s| s.is_running()) || !unbound.is_empty(),
+        bound.iter().any(|s| s.is_running()) || unbound.iter().any(|s| s.meta.egress.is_none()),
         file.scoped_entry(scope, service),
     ) {
         (true, Some(entry)) => match (svc, resolve(entry, ctx.store.as_ref())) {
@@ -398,18 +399,25 @@ fn explain_impact<R: Runner>(
         }
     }
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
-    match (&new, Policy::load(&ctx.paths)) {
-        _ if unbound.is_empty() => {}
-        (None, _) => writeln!(
+    let value = new.as_ref().map(|(_, v)| v.as_str());
+    // A sandbox that isn't hosted needs the value.
+    let (unbound, unread): (Vec<_>, Vec<_>) = unbound
+        .into_iter()
+        .partition(|s| s.meta.egress.is_some() || value.is_some());
+    if !unread.is_empty() {
+        writeln!(
             &ctx.out,
             "{} don't have it yet; run `bento secret set {service}` again once it can be read",
-            names(&unbound)
-        )?,
-        (Some(_), Err(e)) => crate::warning!(
+            names(&unread)
+        )?;
+    }
+    match (unbound.is_empty(), Policy::load(&ctx.paths)) {
+        (true, _) => {}
+        (false, Err(e)) => crate::warning!(
             "couldn't read the policy to give {} the secret: {e:#}",
             names(&unbound)
         ),
-        (Some((_, value)), Ok(policy)) => {
+        (false, Ok(policy)) => {
             for s in unbound {
                 match bind(ctx, file, &policy, s, service, value) {
                     Ok(true) => {
@@ -463,16 +471,20 @@ fn merged(old: &[String], new: Vec<String>) -> Vec<String> {
 /// Binds service `name` to `sb`, which was created without it, as create would have: its network,
 /// its labels, and its credentials. smolvm swaps `value` (in smolvm's env only); a hosted
 /// sandbox's egress process swaps it, from a binding in its `sbx.egress` label, while the guest
-/// gets the placeholder. True when a running `sb` uses the value now; false when it waits for the
-/// next start.
+/// gets the placeholder, so `value` is needed only when `sb` isn't hosted. True when a running `sb`
+/// uses the value now; false when it waits for the next start.
 fn bind<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
     policy: &Policy,
     sb: &sandbox::Sandbox,
     name: &str,
-    value: &str,
+    value: Option<&str>,
 ) -> Result<bool> {
+    // Before anything changes.
+    if sb.meta.egress.is_none() && value.is_none() {
+        bail!("no value to hand to a sandbox that isn't hosted");
+    }
     let services = [name.to_string()];
     let creds = provision::credentials(file, &services)?;
     let rec = &sb.meta.rec;
@@ -517,7 +529,11 @@ fn bind<R: Runner>(
         ctx.vm.set_labels(&sb.machine, &labels)?;
         return Ok(sb.is_running() && provision::restart_egress(ctx, sb));
     }
-    let env = with_value(&sb.meta, creds.iter().map(|c| &c.env_var).collect(), value);
+    let env = with_value(
+        &sb.meta,
+        creds.iter().map(|c| &c.env_var).collect(),
+        value.unwrap_or_default(),
+    );
     if !creds.is_empty() {
         ctx.vm
             .add_credentials(&sb.machine, &creds, &env)
