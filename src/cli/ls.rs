@@ -13,6 +13,12 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     let mut sandboxes = sandbox::list(&ctx.vm)?;
     // sbx's ls has no --all.
     sandboxes.retain(|s| !name::is_internal(s.name()));
+    // Ports are in a running sandbox's status only; `-q` prints names alone.
+    for sb in sandboxes.iter_mut().filter(|s| s.is_running() && !a.quiet) {
+        if let Some(full) = ctx.vm.status(&sb.machine)? {
+            sb.ports = full.published_ports;
+        }
+    }
     let format = a.output.pick();
     write!(
         &ctx.out,
@@ -230,5 +236,34 @@ mod tests {
         assert_eq!(age(125), "2m");
         assert_eq!(age(7200), "2h");
         assert_eq!(age(3 * 86400), "3d");
+    }
+
+    /// A running sandbox's ports come from its status; a stopped one has none to ask for.
+    #[test]
+    fn ls_shows_a_running_sandboxs_ports() {
+        let mut t = crate::testutil::test_env(&[]);
+        t.sandboxes(&[("a", "running", &[]), ("b", "stopped", &[])]);
+        let mut status: serde_json::Value =
+            serde_json::from_str(&crate::testutil::sandbox_json("a", "running", &[])).unwrap();
+        status["published_ports"] = serde_json::json!([{"host": 18080, "guest": 80}]);
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-a"], &status.to_string());
+        t.sbt(&["ls"]).unwrap();
+        assert!(t.stdout().contains("18080"), "{}", t.stdout());
+        let statuses: Vec<String> = t
+            .calls()
+            .into_iter()
+            .filter(|l| l.contains("status"))
+            .collect();
+        assert_eq!(statuses, ["machine status -n sbx-a --json"]);
+    }
+
+    /// `ls -q` prints names alone: no ports to ask for.
+    #[test]
+    fn quiet_ls_asks_for_no_ports() {
+        let mut t = crate::testutil::test_env(&[]);
+        t.sandboxes(&[("a", "running", &[])]);
+        t.sbt(&["ls", "-q"]).unwrap();
+        assert_eq!(t.calls(), ["machine ls --json"]);
     }
 }

@@ -172,20 +172,14 @@ impl<'a, R: Runner> Listing<'a, R> {
     }
 }
 
-/// All sandboxes, sorted by name; running ones include their published ports.
+/// All sandboxes, sorted by name, from one smolvm call: without their published ports, which
+/// only `machine status` reports (`get`).
 pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
-    let mut out = Vec::new();
-    for m in vm.list()? {
-        let Some(mut sb) = Sandbox::from_machine(&m) else {
-            continue;
-        };
-        if sb.is_running()
-            && let Some(full) = vm.status(&m.name)?
-        {
-            sb.ports = full.published_ports;
-        }
-        out.push(sb);
-    }
+    let mut out: Vec<Sandbox> = vm
+        .list()?
+        .iter()
+        .filter_map(Sandbox::from_machine)
+        .collect();
     out.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
     Ok(out)
 }
