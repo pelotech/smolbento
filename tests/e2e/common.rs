@@ -539,20 +539,10 @@ impl Image {
     pub(crate) fn pull(reference: &str) -> Image {
         let uid = smolbento::util::host_uid();
         let root = std::env::temp_dir().join(format!("sbt-e2e-oci-cache-{uid}"));
-        let key: String = reference
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
+        let key = reference.replace(['/', ':', '@'], "_");
         let dir = root.join(&key);
         if !dir.join("index.json").exists() {
             let tmp = root.join(format!(".tmp-{key}-{}", std::process::id()));
-            std::fs::create_dir_all(&tmp).unwrap();
             let pulled = smolbento::kits::registry::pull_image(
                 reference,
                 &tmp,
