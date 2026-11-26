@@ -91,7 +91,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     terminated.sort();
     terminated.dedup();
     // The unit's socket starts the process again on the next connection.
-    let restart = Restart::new(ruled, Box::new(|| std::process::exit(0)));
+    let restart = Restart::new(ruled.clone(), Box::new(|| std::process::exit(0)));
     let host_access = sb.meta.rec.host_access;
     let config = InterceptorConfig {
         machine: sb.machine,
@@ -104,7 +104,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         ca,
         extra_cas: vec![],
         upstream_roots_pem: vec![],
-        terminate_hosts: terminated.clone(),
+        // Bindings already decrypt their hosts.
+        terminate_hosts: ruled,
         request_filter: Some(Arc::new(Filter(source.clone()))),
     };
     let sandbox = name.to_string();
