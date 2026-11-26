@@ -222,7 +222,7 @@ pub fn has_ref(v: &Value) -> bool {
 
 /// Expands every string and map key of a capability's config with `ex` (SPEC-v3 §6): the
 /// document, not its text, so a value lands whole whatever it holds. A string that is one whole
-/// reference takes the type its value spells (`typed`), except under a key in `text`, which stays
+/// `kit.args` reference takes the type its value spells (`typed`), except under a key in `text`, which stays
 /// text (`volume@1`'s `size` and `mode`). Two keys that expand to one are an error.
 pub fn expand_value(
     v: &Value,
@@ -230,7 +230,7 @@ pub fn expand_value(
     ex: &dyn Fn(&str) -> Result<String>,
 ) -> Result<Value> {
     Ok(match v {
-        Value::String(s) if is_whole_ref(s) => typed(ex(s)?),
+        Value::String(s) if is_whole_arg_ref(s) => typed(ex(s)?),
         Value::String(s) => Value::String(ex(s)?),
         Value::Array(a) => Value::Array(
             a.iter()
@@ -255,10 +255,13 @@ pub fn expand_value(
     })
 }
 
-fn is_whole_ref(s: &str) -> bool {
-    KIT_REF
-        .find(s)
-        .is_some_and(|m| m.start() == 0 && m.end() == s.len())
+/// Whether `s` is nothing but a `kit.args` reference: only those take their value's type (the
+/// spec's `wholeArgRef`); an environment value is always text.
+fn is_whole_arg_ref(s: &str) -> bool {
+    KIT_REF.captures(s).is_some_and(|c| {
+        let m = c.get(0).expect("the whole match");
+        m.start() == 0 && m.end() == s.len() && &c[1] == "args"
+    })
 }
 
 /// The value a whole reference's text spells, when the spelling survives a round trip (the
@@ -519,6 +522,19 @@ mod tests {
         assert_eq!(
             expand_with(doc, &["mode"], "755").unwrap(),
             serde_json::json!({"a": "port 755", "mode": "755"})
+        );
+    }
+
+    /// The spec types a whole `kit.args` reference only: an environment value is text, so a file's
+    /// `content: ${{ kit.env.IS_SANDBOX }}` stays the string "1".
+    #[test]
+    fn a_whole_env_reference_stays_text() {
+        let env = BTreeMap::from([("IS_SANDBOX".to_string(), "1".to_string())]);
+        let ex = |s: &str| expand(s, &BTreeMap::new(), &BTreeSet::new(), &env);
+        let doc = serde_json::json!({"content": "${{ kit.env.IS_SANDBOX }}"});
+        assert_eq!(
+            expand_value(&doc, &[], &ex).unwrap(),
+            serde_json::json!({"content": "1"})
         );
     }
 
