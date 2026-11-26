@@ -17,8 +17,8 @@ test:
 needs_dhi := "test(local_kit_builds_from_a_registry_that_needs_a_login)"
 
 # Run end-to-end tests against real smolvm VMs (needs a hypervisor), `threads` VMs at a time;
-# further arguments go to nextest (e.g. `-E 'test(clone)'`)
-e2e threads="2" *args:
+# further arguments go to nextest (e.g. `-E 'test(clone)'`). CI's shards pass 2 (`e2e-shard`).
+e2e threads="8" *args:
     cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e) & !({{needs_dhi}})' {{args}}
 
 # The slowest e2e tests (CI, two at a time), dealt to `e2e-shard`'s shards by hand: nextest's

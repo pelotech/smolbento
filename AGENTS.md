@@ -185,10 +185,10 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
     regression; Docker Hub pull timeouts are the environment, not the change.
   - Run `just test` and the affected `just e2e` tests on your Mac before pushing changes that affect
     macOS: CI can't boot VMs on macOS.
-- Writing e2e tests: they run two at a time (`just e2e 4` for more), so each needs its own sandbox
-  names and config/cache dirs. A test that changes global state (like the shared `_builder`) must be
-  the only one that does. A test that needs outside credentials gets its own recipe
-  (`just e2e-dhi`) and fails without them; it never returns early, which would pass.
+- Writing e2e tests: they run eight at a time locally (two per CI shard), so each needs its own
+  sandbox names and config/cache dirs. A test that changes global state (like the shared
+  `_builder`) must be the only one that does. A test that needs outside credentials gets its own
+  recipe (`just e2e-dhi`) and fails without them; it never returns early, which would pass.
 - CI runs Linux only by default. VM tests run in CI only on x64 Linux, split over three runners by
   `just e2e-shard N`: the slowest tests are placed by hand (`e2e_heavy_*` in the justfile, kept in
   step with `.config/nextest.toml`), the rest by nextest's `--partition slice:N/3`. So an e2e test
