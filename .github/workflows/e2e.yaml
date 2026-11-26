@@ -23,6 +23,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      nix: ${{ steps.filter.outputs.nix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,3 +66,6 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
+          # The published nix kit unless this change touches kits/nix: building it on a cold
+          # runner made the nix test the longest by far.
+          SMOLBENTO_E2E_NIX_KIT: ${{ needs.changes.outputs.nix != 'true' && 'nix' || '' }}

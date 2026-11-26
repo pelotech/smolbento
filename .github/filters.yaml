@@ -3,6 +3,7 @@
 code:
   - 'src/**'
   - 'tests/**'
+  - 'kits/**'
   - 'Cargo.toml'
   - 'Cargo.lock'
   - 'deny.toml'
@@ -20,3 +21,6 @@ build:
   - 'justfile'
   - '.github/workflows/build.yaml'
   - '.github/actions/nix-devshell/**'
+# The shipped nix kit: e2e builds it from the tree when it changed, else uses the published one.
+nix:
+  - 'kits/nix/**'

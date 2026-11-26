@@ -1180,8 +1180,14 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
 }
 
 /// The shipped `kits/nix` source, built in the builder sandbox.
-fn nix_kit_dir() -> String {
-    format!("{}/kits/nix", env!("CARGO_MANIFEST_DIR"))
+/// The nix kit under test: `kits/nix` built from this tree, unless `SMOLBENTO_E2E_NIX_KIT` names
+/// another. CI passes `nix` (the published kit) when a change leaves `kits/nix` alone: building it
+/// on a cold runner was most of the slowest test.
+fn nix_kit() -> String {
+    std::env::var("SMOLBENTO_E2E_NIX_KIT")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| format!("{}/kits/nix", env!("CARGO_MANIFEST_DIR")))
 }
 
 /// A trivial build: exercises nix-daemon (the store is root's) without nixpkgs.
@@ -1196,7 +1202,7 @@ const NIX_BUILD: &str = r#"nix build --impure --no-link --expr 'builtins.derivat
 pub(crate) fn nix_kit_works_for_an_agent_and_a_workload_image_user() {
     let e = E2e::new("nixkit");
     let reg = Registry::start(&e);
-    let nix = nix_kit_dir();
+    let nix = nix_kit();
 
     // The `claude` agent. Its agent file is in `~/.claude`, so the kit's instructions are too.
     let agent = "the claude agent sandbox";
