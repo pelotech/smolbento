@@ -17,6 +17,9 @@ pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 /// The kit builder's stored registry hosts, sorted: its header bindings, fixed at create.
 pub const REGISTRIES: &str = "sbx.registries";
+/// The published ports whose host port was picked (`-p PORT`, a kit's ports), as `HOST:PORT[/udp]`:
+/// a start picks new ones, as sbx does.
+pub const AUTO_PORTS: &str = "sbx.auto-ports";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
@@ -153,6 +156,8 @@ pub struct Recorded {
     pub credential_env: Vec<String>,
     /// The kit builder's stored registry hosts, sorted (`sbx.registries`).
     pub registries: Vec<String>,
+    /// Published ports a start picks a new host port for (`sbx.auto-ports`), as `HOST:PORT[/udp]`.
+    pub auto_ports: Vec<String>,
     /// Applied kits in dependency order (a preset agent isn't a kit), as `kit add` added to them
     /// (`sbx.kits`).
     pub kits: Vec<KitRecord>,
@@ -318,6 +323,7 @@ impl Meta {
             (CREDENTIAL_HOSTS, list(&self.rec.credential_hosts)),
             (CREDENTIAL_ENV, list(&self.rec.credential_env)),
             (REGISTRIES, list(&self.rec.registries)),
+            (AUTO_PORTS, list(&self.rec.auto_ports)),
             (CLONE, flag(self.clone_repo.is_some())),
             (CLONE_TOP, clone_top.cloned()),
             (FORK_OF, self.fork_of.clone()),
@@ -412,6 +418,7 @@ impl Meta {
                 credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
                 credential_env: list(labels.get(CREDENTIAL_ENV)),
                 registries: list(labels.get(REGISTRIES)),
+                auto_ports: list(labels.get(AUTO_PORTS)),
                 kits: json(labels, KITS).unwrap_or_default(),
                 command: json(labels, COMMAND),
                 user: text(USER),

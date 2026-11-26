@@ -6,7 +6,7 @@ use std::io::Write;
 
 use super::{Ctx, PortsArgs, table};
 use crate::provision;
-use crate::sandbox::{self, options};
+use crate::sandbox::{self, labels, options};
 use crate::smolvm::{PortMap, PublishedPort, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
@@ -35,13 +35,33 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     }
     if !publish.is_empty() && !udp {
         // sbx starts a stopped sandbox to publish on it; UDP ports can only change while stopped.
+        let was_stopped = !sb.is_running();
         provision::ensure_running(ctx, &mut sb)?;
+        if was_stopped {
+            // Its start picked new host ports: their label is the current one.
+            sb = sandbox::get(&ctx.vm, &a.sandbox)?;
+        }
     }
     if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
+    }
+    // The picked ones are picked again at each start, as sbx: recorded until unpublished.
+    let gone: Vec<String> = unpublish.iter().map(PortMap::arg).collect();
+    let mut auto: Vec<String> = (sb.meta.rec.auto_ports.iter())
+        .filter(|p| !gone.contains(p))
+        .cloned()
+        .collect();
+    auto.extend(
+        (a.publish.iter().zip(&publish))
+            .filter(|(spec, _)| options::picks_host(spec))
+            .map(|(_, p)| p.arg()),
+    );
+    if auto != sb.meta.rec.auto_ports {
+        ctx.vm
+            .set_label(&sb.machine, labels::AUTO_PORTS, &auto.join(","))?;
     }
     if a.output.is_table() {
         for p in &publish {
@@ -170,6 +190,44 @@ mod tests {
         );
         let err = t.sbt_err(&["ports", "a1", "--publish", "5353:53/udp"]);
         assert!(err.contains("stop"), "{err}");
+    }
+
+    /// A port published without a host port is picked again at each start (as sbx): recorded on
+    /// publish, forgotten on unpublish.
+    #[test]
+    fn a_picked_port_is_recorded_until_unpublished() {
+        let mut t = test_env(&[]);
+        t.sandbox("a1", "running", &[("sbx.auto-ports", "40001:80")]);
+        t.sbt(&["ports", "a1", "--publish", "81"]).unwrap();
+        let label = t.calls().last().unwrap().clone();
+        let picked = label
+            .strip_prefix("machine update -n sbx-a1 --label sbx.auto-ports=40001:80,")
+            .unwrap_or_else(|| panic!("{label}"));
+        assert!(picked.ends_with(":81"), "{label}");
+        t.sbt(&["ports", "a1", "--unpublish", "40001:80"]).unwrap();
+        assert_eq!(
+            t.calls().last().unwrap(),
+            "machine update -n sbx-a1 --label sbx.auto-ports="
+        );
+    }
+
+    /// Publishing on a stopped sandbox starts it, which picks new host ports: the label keeps
+    /// those, not the ones from before the start.
+    #[test]
+    fn publishing_on_a_stopped_sandbox_keeps_the_ports_its_start_picked() {
+        let mut t = test_env(&[]);
+        // After the start: what its re-pick recorded.
+        t.sandbox("a1", "running", &[("sbx.auto-ports", "45000:80")]);
+        t.runner().once_ok(
+            &["machine", "status"],
+            &crate::testutil::sandbox_json("a1", "stopped", &[("sbx.auto-ports", "40001:80")]),
+        );
+        t.sbt(&["ports", "a1", "--publish", "81"]).unwrap();
+        let label = t.calls().last().unwrap().clone();
+        assert!(
+            label.starts_with("machine update -n sbx-a1 --label sbx.auto-ports=45000:80,"),
+            "{label}"
+        );
     }
 
     #[test]

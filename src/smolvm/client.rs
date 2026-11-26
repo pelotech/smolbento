@@ -42,7 +42,8 @@ pub struct PortMap {
 }
 
 impl PortMap {
-    fn arg(&self) -> String {
+    /// `HOST:GUEST[/udp]`, as smolvm and the `sbx.auto-ports` label take it.
+    pub fn arg(&self) -> String {
         format!(
             "{}:{}{}",
             self.host,
@@ -454,20 +455,34 @@ impl<R: Runner> Smolvm<R> {
     }
 
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, "-p", ports)
+        self.update_ports(name, &[], ports, &[])
     }
 
     pub fn unpublish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, "--remove-port", ports)
+        self.update_ports(name, ports, &[], &[])
     }
 
-    fn update_ports(&self, name: &str, port_flag: &str, ports: &[PortMap]) -> Result<()> {
-        if ports.is_empty() {
+    /// Removes the `remove` mappings, adds `add` and sets `labels`, in one update (smolvm removes
+    /// before it adds); nothing to change makes no call.
+    pub fn update_ports(
+        &self,
+        name: &str,
+        remove: &[PortMap],
+        add: &[PortMap],
+        labels: &[(&str, String)],
+    ) -> Result<()> {
+        if remove.is_empty() && add.is_empty() && labels.is_empty() {
             return Ok(());
         }
         let mut a = args(&["machine", "update", "-n", name]);
-        for p in ports {
-            flag(&mut a, port_flag, p.arg());
+        for p in remove {
+            flag(&mut a, "--remove-port", p.arg());
+        }
+        for p in add {
+            flag(&mut a, "-p", p.arg());
+        }
+        for (k, v) in labels {
+            flag(&mut a, "--label", format!("{k}={v}"));
         }
         self.call(a).map(drop)
     }

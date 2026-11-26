@@ -135,6 +135,11 @@ fn add_remote_and_branch<R: Runner>(
         (labels::SERVICE.to_string(), "false".to_string()),
         (labels::ID.to_string(), id.clone()),
     ];
+    // Nor picked ports to replace at its starts: smolvm gave it fresh ones (an empty label reads as
+    // none, as for the agent below).
+    if !parent.meta.rec.auto_ports.is_empty() {
+        labels.push((labels::AUTO_PORTS.to_string(), String::new()));
+    }
     // Nor an SSH agent: an empty label reads as none (smolvm can't remove an inherited one).
     // Like the bridge, the copy's mount still points at the parent's socket.
     if parent.meta.ssh_agent.is_some() {
@@ -302,6 +307,27 @@ mod tests {
         let r = repo.display().to_string();
         let ws = serde_json::to_string(&[&r]).unwrap();
         (r, ws)
+    }
+
+    /// smolvm gives a fork fresh host ports, so its parent's picked ones aren't its to replace.
+    #[test]
+    fn a_fork_does_not_inherit_its_parents_picked_ports() {
+        let mut t = test_env(&[]);
+        let (_d, repo) = temp_repo();
+        let (r, ws) = clone_labels(&repo);
+        parent(
+            &t,
+            "running",
+            &[
+                ("sbx.clone", "true"),
+                ("sbx.workspace", &r),
+                ("sbx.workspaces", &ws),
+                ("sbx.auto-ports", "40001:80"),
+            ],
+        );
+        t.sbt(&["fork", "a"]).unwrap();
+        let branch = t.calls_of("machine branch").remove(0);
+        assert!(branch.contains(" --label sbx.auto-ports= "), "{branch}");
     }
 
     #[test]

@@ -144,10 +144,15 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
 }
 
 /// What a stopped sandbox needs before its start: the stale unresolved-secrets list removed
-/// (the restarted process writes a new one) and its egress process restarted.
+/// (the restarted process writes a new one), its egress process restarted, and new host ports for
+/// the ones that were picked.
 pub(crate) fn before_start<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     let _ = std::fs::remove_file(crate::egress::unresolved_file(&ctx.paths, sb.name()));
     restart_egress(ctx, sb);
+    // Only warns: the start then binds the ports it had, which may still be free.
+    if let Err(e) = sandbox::repick_ports(&ctx.vm, sb) {
+        crate::warning!("{}: picking new host ports: {e:#}", sb.name());
+    }
 }
 
 /// Prints `egress_warnings`, as every start does after the sandbox is up.

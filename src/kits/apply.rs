@@ -127,8 +127,14 @@ pub fn apply(
     }
     for &(guest, udp) in &m.ports {
         if !req.ports.iter().any(|p| p.guest == guest && p.udp == udp) {
-            let host = free_port()?;
-            req.ports.push(PortMap { host, guest, udp });
+            let p = PortMap {
+                host: free_port()?,
+                guest,
+                udp,
+            };
+            // Picked again at each start, as sbx.
+            req.rec.auto_ports.push(p.arg());
+            req.ports.push(p);
         }
     }
     let tmpfs = add_volumes(req, &m.volumes);

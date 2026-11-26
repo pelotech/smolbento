@@ -1680,3 +1680,65 @@ fn start_clears_a_stale_unresolved_secrets_list() {
     t.sbt(&["start", "claude-proj"]).unwrap();
     assert!(!stale.exists(), "{}", stale.display());
 }
+
+/// As sbx, a port published without a host port gets a new one at each start: the one picked
+/// before may have been taken while the sandbox was stopped. Explicit host ports stay.
+#[test]
+fn create_records_the_ports_it_picked() {
+    let mut t = test_env(&[]);
+    creatable_as(&t, "claude-proj");
+    t.sbt(&["create", "claude", ".", "-p", "80", "-p", "8080:81"])
+        .unwrap();
+    let create = t.calls_of("machine create").remove(0);
+    let auto = create
+        .split(" --label ")
+        .find_map(|kv| kv.strip_prefix("sbx.auto-ports="))
+        .expect("auto ports label")
+        .split(' ')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(auto.ends_with(":80") && !auto.contains("81"), "{auto}");
+}
+
+#[test]
+fn a_start_picks_new_host_ports_for_the_picked_ones() {
+    let mut t = test_env(&[]);
+    t.sandbox(
+        "a1",
+        "stopped",
+        &[("sbx.auto-ports", "40001:80,40002:53/udp")],
+    );
+    t.sbt(&["start", "a1"]).unwrap();
+    let calls = t.calls();
+    let update = calls
+        .iter()
+        .position(|l| l.contains("--remove-port"))
+        .expect("ports replaced");
+    let start = calls
+        .iter()
+        .position(|l| l.starts_with("machine start"))
+        .unwrap();
+    assert!(update < start, "{calls:#?}");
+    let l = &calls[update];
+    assert!(
+        l.starts_with(
+            "machine update -n sbx-a1 --remove-port 40001:80 --remove-port 40002:53/udp -p "
+        ),
+        "{l}"
+    );
+    let new: Vec<&str> = l
+        .split(" -p ")
+        .skip(1)
+        .map(|s| s.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(new.len(), 2, "{l}");
+    assert!(
+        new[0].ends_with(":80") && new[1].ends_with(":53/udp"),
+        "{l}"
+    );
+    assert!(
+        l.ends_with(&format!(" --label sbx.auto-ports={},{}", new[0], new[1])),
+        "{l}"
+    );
+}
