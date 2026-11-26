@@ -107,7 +107,7 @@ command, never prompts: a command that would ask fails and names the flag to use
 | `-m, --memory SIZE` | Such as `4g` or `512m`. Default: half of host memory, from 512 MiB to 32 GiB |
 | `-e, --env KEY=VALUE` | A bare `KEY` copies the host's value |
 | `--env-file FILE` | `KEY=VALUE` lines |
-| `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Published on `127.0.0.1`; with no host port, a free one is picked |
+| `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Published on `127.0.0.1`; with no host port, a free one is picked, and a new one at each start (as sbx) |
 | `-t, --template TEMPLATE` | Another image, or a saved [template](kits.md#templates) |
 | `--clone` | The agent works on its own clone of the repo ([Clone mode](#clone-mode)) |
 
@@ -360,6 +360,11 @@ bento ports claude-myrepo --publish 8080:80
 bento ports claude-myrepo
 bento ports claude-myrepo --unpublish 8080:80
 ```
+
+A port published without a host port (`--publish 3000`, `-p 3000` at create, or a port a kit
+declares) gets a new free host port at each start, as in sbx: the one it had may have been taken
+while the sandbox was stopped. `bento ports` and `bento ls` show the current one. A port given as
+`HOST:PORT` keeps its host port.
 
 Ports bind `127.0.0.1` and `[::1]`. UDP ports change only while the sandbox is stopped, so a change
 that includes one doesn't start it.

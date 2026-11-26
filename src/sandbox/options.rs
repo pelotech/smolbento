@@ -46,8 +46,20 @@ fn parse_port(value: &str, spec: &str) -> Result<u16> {
 }
 
 pub fn free_port() -> Result<u16> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).context("finding a free port")?;
-    Ok(listener.local_addr()?.port())
+    Ok(free_ports(1)?[0])
+}
+
+/// `n` free ports, all different: each is held until every one is picked.
+pub fn free_ports(n: usize) -> Result<Vec<u16>> {
+    let held = (0..n)
+        .map(|_| TcpListener::bind(("127.0.0.1", 0)).context("finding a free port"))
+        .collect::<Result<Vec<_>>>()?;
+    held.iter().map(|l| Ok(l.local_addr()?.port())).collect()
+}
+
+/// Whether `spec` (`-p`) leaves the host port to be picked: then a start picks a new one, as sbx.
+pub fn picks_host(spec: &str) -> bool {
+    parse_publish(spec, &|| Ok(0)).is_ok_and(|p| p.host == 0)
 }
 
 /// Parses `4g`, `512m`, `512MiB` or a byte count into MiB (minimum 512).

@@ -18,7 +18,8 @@ use anyhow::{Context, Result, anyhow};
 use crate::bridge;
 use crate::kits::apply::KitSteps;
 use crate::smolvm::{
-    ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, PullProgress, Runner, Smolvm,
+    ExecSpec, Machine, MachineState, NetworkSpec, PortMap, PublishedPort, PullProgress, Runner,
+    Smolvm,
 };
 use crate::workspace::MOUNTLESS_WORKDIR;
 
@@ -323,6 +324,23 @@ fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path) -> Vec<String> {
         warn("SSH agent");
     }
     out
+}
+
+/// New host ports for a stopped sandbox's picked ones (`sbx.auto-ports`), as sbx picks them at
+/// each start: one picked before may have been taken since.
+pub fn repick_ports<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Result<()> {
+    let no_host = || -> Result<u16> { anyhow::bail!("no host port") };
+    let old: Vec<PortMap> = (sb.meta.rec.auto_ports.iter())
+        .filter_map(|p| options::parse_publish(p, &no_host).ok())
+        .collect();
+    if old.is_empty() {
+        return Ok(());
+    }
+    let new: Vec<PortMap> = (old.iter().zip(options::free_ports(old.len())?))
+        .map(|(p, host)| PortMap { host, ..*p })
+        .collect();
+    let label = new.iter().map(PortMap::arg).collect::<Vec<_>>().join(",");
+    vm.update_ports(&sb.machine, &old, &new, &[(labels::AUTO_PORTS, label)])
 }
 
 /// Starts the sandbox if needed. The plan is only computed for a start, because resolving secrets

@@ -221,6 +221,51 @@ pub(crate) fn ports_publish_live() {
     e.ok(&["ports", &e.name, "--unpublish", &format!("{port}:8000")]);
 }
 
+/// A port published without a host port gets a new one at each start, as in sbx: here the old one
+/// is taken while the sandbox is stopped, and the start still succeeds on a new one.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+pub(crate) fn a_picked_port_is_picked_again_at_each_start() {
+    let e = E2e::new("portre");
+    e.create_alpine_offline();
+    e.ok(&["ports", &e.name, "--publish", "8000"]);
+    let host_port = || -> u16 {
+        let rows: serde_json::Value =
+            serde_json::from_str(&e.ok(&["ports", &e.name, "--json"])).unwrap();
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["sandbox_port"] == 8000)
+            .expect("8000 published");
+        row["host_port"].as_u64().unwrap() as u16
+    };
+    let old = host_port();
+    e.ok(&["stop", &e.name]);
+    // Something else takes it while the sandbox is stopped.
+    let _taken = std::net::TcpListener::bind(("127.0.0.1", old)).expect("old port free");
+    e.ok(&["start", &e.name]);
+    let new = host_port();
+    assert_ne!(new, old);
+    smolvm_ok(&[
+        "machine",
+        "exec",
+        "--name",
+        &e.machine(),
+        "-d",
+        "--",
+        "sh",
+        "-c",
+        "while true; do printf 'HTTP/1.0 200 OK\\r\\n\\r\\nhi-again\\n' | nc -l -p 8000; done",
+    ]);
+    let mut body = Ok(String::new());
+    wait_until(30, || {
+        body = host_get(new, "/");
+        body.as_ref().is_ok_and(|b| b.contains("hi-again"))
+    });
+    assert!(body.expect("new port answers").contains("hi-again"));
+}
+
 /// The pid of this sandbox's egress process, from the service manager; `None` while it isn't running.
 pub(crate) fn egress_pid(unit: &std::path::Path) -> Option<u32> {
     let stem = unit.file_stem()?.to_str()?;

@@ -61,6 +61,11 @@ fn base_request<R: Runner>(
         .iter()
         .map(|p| options::parse_publish(p, &options::free_port))
         .collect::<Result<Vec<_>>>()?;
+    // Picked again at each start, as sbx.
+    let auto_ports = (opts.publish.iter().zip(&ports))
+        .filter(|(spec, _)| options::picks_host(spec))
+        .map(|(_, p)| p.arg())
+        .collect();
     // Before any smolvm call, so a bad value fails early.
     let skills_mode = crate::skills::resolve_mode(opts.skills.as_deref(), &ctx.settings)?;
 
@@ -69,6 +74,7 @@ fn base_request<R: Runner>(
         rec: Recorded {
             no_fuse: opts.no_fuse,
             read_only_files: opts.read_only_files.clone(),
+            auto_ports,
             ..Default::default()
         },
         name,
