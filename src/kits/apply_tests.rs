@@ -181,8 +181,7 @@ fn a_missing_custom_secret_names_the_command_that_defines_it() {
     assert_eq!(
         missing_secret("k", "my-api", "api.x.com"),
         "kit k needs the my-api secret; set it with \
-             bento secret set-custom --env MY_API --host api.x.com \
-             and recreate the sandbox"
+             bento secret set-custom --env MY_API --host api.x.com"
     );
     // `set-custom --env MY_API` names its service my-api, never my_api or 1tok.
     for service in ["my_api", "1tok", "My-Api"] {
@@ -398,27 +397,29 @@ fn an_inject_only_credential_sets_its_header() {
     assert_eq!(req.rec.credential_services["SBX_KIT_XSVC"], "xsvc");
 }
 
+/// tck: credential@1/required-without-binding-fails. sbx warns and goes on instead.
 #[test]
-fn a_missing_required_credential_warns_like_sbx_and_an_optional_one_is_skipped() {
+fn a_missing_required_credential_fails_and_an_optional_one_is_skipped() {
     let c = || cred("github", Some("GH_TOKEN"), vec![inject("github.com", None)]);
-    for optional in [false, true] {
+    let run_with = |optional| {
         let p = plan(vec![with(
             kit("gh", Kind::Mixin),
             "credential@1",
             optional,
             c(),
         )]);
-        let mut policy = Policy::default();
         let mut req = request();
-        run(&p, &mut req, &mut policy).unwrap();
-        assert!(req.credentials.is_empty(), "{:?}", req.credentials);
-        assert!(credential_args(&req).is_empty());
-    }
+        let r = run(&p, &mut req, &mut Policy::default());
+        (r, req)
+    };
+    let (r, req) = run_with(true);
+    r.unwrap();
+    assert!(req.credentials.is_empty(), "{:?}", req.credentials);
+    assert!(credential_args(&req).is_empty());
+    let e = run_with(false).0.unwrap_err();
     assert_eq!(
-        unbound_required("gh", "github", "github.com"),
-        "WARN: required credential not found for service github\n\
-             kit gh needs the github secret; set it with bento secret set github \
-             and recreate the sandbox"
+        format!("{e:#}"),
+        "kit gh needs the github secret; set it with bento secret set github"
     );
 }
 

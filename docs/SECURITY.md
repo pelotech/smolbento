@@ -107,9 +107,8 @@ kits you trust.
   - A credential's hosts are always reachable, and a deny rule can't block them while the kit's
     binding exists. That binding lasts the sandbox's life, because smolvm needs those hosts to send
     the secret. Recreate the sandbox without the kit to drop it.
-  - A credential with no secret set doesn't stop create. It warns
-    (`WARN: required credential not found for service SERVICE`), and requests go out without it
-    until you set the secret and recreate the sandbox.
+  - A required credential with no secret set stops create, naming the secret to set. An optional one
+    is skipped, and requests go out without it.
   - A credential needed only while installing is gone after install.
 - Install steps run as root. A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`,
   `TERM`, the proxy and CA variables, and the variables it declares). Startup and v2 steps get the

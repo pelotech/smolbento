@@ -339,6 +339,11 @@ A kit that **requires** a capability marked "no" or "later" fails, with its `typ
 anything is created. An optional one is skipped, with a warning when `kit.showWarnings` is on (or
 with `-D`).
 
+A required `credential@1` whose secret isn't set fails the create (or `kit add`) too, naming the
+`bento secret set` command to run, as the spec requires. sbx warns
+(`WARN: required credential not found for service SERVICE`) and the kit's requests go out without
+it. Docker's published agent kits mark their credentials optional, so this doesn't stop them.
+
 Capability groups (spec §7.1.1) are applied whole or not at all. smolbento rejects a group when one
 of its members is a capability marked "no" or "later", or, for a sandbox that won't be hosted, a
 `network-policy@2` entry with method or path rules. A rejected optional group is skipped, and its warning names the member. A rejected
@@ -440,9 +445,6 @@ for an optional entry.
 - Composition errors use sbx's texts, with kits named as typed. They are
   `resolve: the kit set is not coherent:` with one `  - <problem>` line each,
   `resolve: dependency cycle among ./a, ./b`, and `kit ./x is listed more than once`.
-- A required credential with no secret warns
-  `WARN: required credential not found for service SERVICE`, and the requests go out without it.
-  The warning adds the `bento secret set` command to run.
 - `kit inspect` and `kit validate` print sbx's summary (`Name:`, `Kind:`, `Schema:`, `Policies:`,
   `Credentials:`, `Commands:`) and `✓ <ref> — valid`. `kit inspect --format json` is the
   v2-shaped descriptor; `kit validate --json` is `{reference, kind, valid, warnings}`.
