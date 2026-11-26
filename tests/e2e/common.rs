@@ -40,9 +40,17 @@ impl E2e {
     }
 
     /// Built-in agents load sbx's published kits (`docker.io/sbx/<name>:latest`), not the
-    /// stand-ins every other test uses with `-t <image>`.
+    /// stand-ins every other test uses with `-t <image>`. They come from a kit cache every test
+    /// process and later run shares, so each (hundreds of MB) downloads once; the kit cache takes
+    /// concurrent writers.
     pub(crate) fn real_agent_kits(&self) {
         self.real_kits.set(true);
+        let uid = smolbento::util::host_uid();
+        let shared = std::env::temp_dir().join(format!("sbt-e2e-kit-cache-{uid}"));
+        std::fs::create_dir_all(&shared).unwrap();
+        let cache = self.dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::os::unix::fs::symlink(&shared, cache.join("kits")).unwrap();
     }
 
     /// The test boots images made for it alone (kits from its registry, builder builds): smolvm
