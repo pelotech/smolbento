@@ -226,7 +226,11 @@ Caveats:
   effect](#secrets)). Each change restarts the egress process, so open connections drop. A new
   service's placeholder variable reaches only commands started afterwards. A stopped sandbox's
   process is restarted before the machine starts, so boot-time connections use the new value.
-- No flow limits apply, except to decrypted connections ([Request rules](#request-rules)).
+- **At most 256 connections at once** per sandbox, of any kind. Connections beyond that are
+  refused.
+- **Uploads to a secret's host are capped at 8 MiB:** a larger request body gets `413`, even one
+  that holds no placeholder, as the body is read whole to swap the secret in. So a `git push` over
+  8 MiB to a git host with a secret fails; other hosts stream any size.
 
 A sandbox falls back to smolvm egress, with a warning at create, when there's no service manager
 for its unit (launchd, or `systemd --user` with a private socket directory and a short enough socket
@@ -300,7 +304,6 @@ On a ruled host:
 - **Replies are asked for uncompressed** (`Accept-Encoding: identity`). One compressed anyway is
   decoded if it's gzip or deflate, up to 64 MiB. A br or zstd reply, or a larger one, gets `502`.
 - **WebSocket:** the upgrade request is judged. The frames after it pass unfiltered.
-- **At most 256 decrypted connections at once** per sandbox. Connections beyond that are refused.
 - **Plain HTTP is refused** (a reset, logged as `plain HTTP to a host with request rules`). The
   egress process can't judge it per request yet: use HTTPS.
 - **Other protocols pass** a host with only bounded denies, as in sbx: SSH to `github.com` still
