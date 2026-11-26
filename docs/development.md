@@ -17,7 +17,7 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 |---|---|
 | `just build` | Build the binary |
 | `just test` | Unit, snapshot and sbx parity tests (nextest) |
-| `just e2e` | Real-VM tests, two at a time. `just e2e 4` runs four; `just e2e-shard 1` is one of CI's three shards. Needs a hypervisor |
+| `just e2e` | Real-VM tests, eight at a time (`just e2e 2` for fewer, on a smaller machine); `just e2e-shard 1` is one of CI's three shards, two at a time. Needs a hypervisor |
 | `just smolvm-pin VERSION` | Pin smolvm `VERSION`: rewrite `smolvm.lock` from that release's checksums |
 | `just smolvm-lock-check` | Check `smolvm.lock` against its release (CI runs it) |
 | `just demo` | Record the README demo (`docs/demo.tape`) into `dist/demo.gif`. Boots a VM; uses its own dirs, never yours |

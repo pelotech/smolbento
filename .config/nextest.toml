@@ -15,6 +15,15 @@ filter = '''binary(e2e) & (
 )'''
 test-group = 'builder'
 
+# On macOS, smolvm seeds a machine made from a pack (a saved template) with storage it prepares
+# in its cache, and with many tests running at once that has failed with "prepare packed image
+# storage: No such file or directory". The one test that creates from a template runs alone
+# there; Linux has no such seeding.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(e2e) & test(=fork_template::template_round_trip)'
+threads-required = 'num-test-threads'
+
 # The slowest e2e tests (`e2e_heavy_*` in the justfile, which deals them to the CI shards) start
 # first, so the longest of a shard doesn't start last and run on alone.
 [[profile.default.overrides]]
@@ -28,8 +37,13 @@ filter = '''binary(e2e) & (
 )'''
 priority = 10
 
-# CI's e2e job runs with NEXTEST_PROFILE=ci. Several e2e tests reach example.com and httpbin.org,
-# so a failed e2e test gets one retry there; nextest still reports it as flaky.
+# Several e2e tests reach example.com and httpbin.org, so a failed e2e test gets one retry, locally
+# and on CI; nextest still reports it as flaky.
+[[profile.default.overrides]]
+filter = 'binary(e2e)'
+retries = 1
+
+# CI's e2e job runs with NEXTEST_PROFILE=ci.
 [profile.ci]
 fail-fast = false
 
@@ -37,5 +51,4 @@ fail-fast = false
 # what it wrote, instead of the job's timeout cancelling the whole shard with nothing to show.
 [[profile.ci.overrides]]
 filter = 'binary(e2e)'
-retries = 1
 slow-timeout = { period = "60s", terminate-after = 5 }
