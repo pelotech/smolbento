@@ -20,7 +20,7 @@ fn wanted_soft(soft: u64, hard: u64) -> Option<u64> {
     (want > soft).then_some(want)
 }
 
-/// Room for 256 decrypted flows at about 6 fds each (the unit's soft limit may be 256).
+/// Room for 256 flows at about 6 fds each (the unit's soft limit may be 256).
 fn raise_fd_limit() {
     let mut lim = libc::rlimit {
         rlim_cur: 0,
