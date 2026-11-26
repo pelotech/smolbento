@@ -95,6 +95,9 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         .with_context(|| format!("creating a temp dir in {}", cache.display()))?;
     let kit_tar = tmp.path().join("kit.tar");
 
+    // Every setup on the smolvm home shares the builder: another build could delete, recreate or
+    // stop it under this one.
+    let _builder = crate::config::lock(&ctx.smolvm.home.join(BUILDER))?;
     let found = match sandbox::find(&ctx.vm, BUILDER)? {
         // Its registry bindings are fixed at create: a changed set of logins needs a new one.
         Some(sb) if sb.meta.rec.registries != hosts => {

@@ -797,3 +797,37 @@ fn unpack_refuses_entries_outside_the_layout() {
         assert!(err.contains(bad), "{bad}: {err}");
     }
 }
+
+/// Builds share the builder (every setup on the smolvm home does): one waits for another, which
+/// could otherwise delete, recreate or stop it mid-build.
+#[test]
+fn a_build_waits_for_one_in_progress() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    let first_call = std::rc::Rc::new(std::cell::Cell::new(None));
+    let seen = first_call.clone();
+    fake.ok(&["machine", "status"], &builder_json("running"))
+        .download(&kit_tar())
+        .during(&["machine"], move |_| {
+            if seen.get().is_none() {
+                seen.set(Some(std::time::Instant::now()));
+            }
+        });
+    // Held by another thread, as by another bento process.
+    let path = t.ctx.smolvm.home.join(BUILDER);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let other = std::thread::spawn(move || {
+        let held = crate::config::lock(&path).unwrap();
+        tx.send(None).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let released = std::time::Instant::now();
+        drop(held);
+        tx.send(Some(released)).unwrap();
+    });
+    assert_eq!(rx.recv().unwrap(), None, "held");
+    let kit = kit_dir();
+    build(&t.ctx, kit.path()).unwrap();
+    other.join().unwrap();
+    let released = rx.recv().unwrap().unwrap();
+    assert!(first_call.get().unwrap() >= released);
+}
