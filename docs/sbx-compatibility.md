@@ -330,6 +330,11 @@ smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-ki
 `a4d6ca06175f2d9cac57428b8c254ba7f5f36570` (`SPEC_COMMIT` in the code; `just conformance` runs the
 spec's suite at the same commit). v3 is still experimental upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
+The spec is followed with hosted egress, the default. A sandbox on smolvm egress
+(`network.egress=smolvm`, or a fallback to it) doesn't enforce the spec's network rules: smolvm has
+no port, method or path rules, so an optional kit rule it can't enforce is widened to its host or
+dropped, where the spec skips it. Use hosted egress for a sandbox that has to follow the spec.
+
 A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
 anything is created. An optional one is skipped, with a warning when `kit.showWarnings` is on (or
 with `-D`).

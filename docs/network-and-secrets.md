@@ -43,7 +43,8 @@ Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs
 `**` allows everything. A sandbox's egress process enforces the rules as sbx does, ports included,
 for every connection that names its host ([Hosted egress](#hosted-egress), the default). Where
 smolvm enforces a rule more loosely than sbx (`network.egress=smolvm`, or a connection with no
-name), see [sbx compatibility](sbx-compatibility.md).
+name), see [sbx compatibility](sbx-compatibility.md). smolvm egress doesn't follow the kit spec's
+network rules; use hosted egress for that ([Kits](sbx-compatibility.md#kits)).
 
 `bento policy ls` prints what sbx does. Under `balanced` with one allow rule and one deny rule:
 
