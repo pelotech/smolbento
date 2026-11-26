@@ -20,10 +20,25 @@ use crate::secrets::{
 use crate::smolvm::{NetworkSpec, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
+    let mut cmd = cmd;
+    // Asked before the lock, which every create and start of a hosted sandbox waits for.
+    // `rm` refuses `--all` with these itself, unasked.
+    if let SecretCmd::Rm(a) = &mut cmd
+        && a.all
+        && a.registry.is_none()
+        && !a.all_sandboxes
+    {
+        confirm(ctx, "Remove every secret?", a.force)?;
+        a.force = true;
+    }
+    // Each command that changes the file reloads it under the lock first (`locked`).
     let mut file = SecretsFile::load(&ctx.paths)?;
     match cmd {
-        SecretCmd::Set(a) if a.registry.is_some() => registry_set(ctx, &mut file, a)?,
-        SecretCmd::Set(a) => {
+        SecretCmd::Set(a) if a.registry.is_some() => {
+            let _lock = locked(ctx, &mut file)?;
+            registry_set(ctx, &mut file, a)?
+        }
+        SecretCmd::Set(mut a) => {
             if a.username.is_some() || a.password_stdin || a.registry_auth_endpoint.is_some() {
                 bail!("--username, --password-stdin and --registry-auth-endpoint need --registry");
             }
@@ -37,15 +52,17 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 .service
                 .context("specify a service, e.g. `bento secret set anthropic`")?;
             if service.starts_with("mcp:") {
+                let _lock = ready(ctx, &mut file, &service, &mut a.source)?;
                 set_mcp(ctx, &mut file, &service, a.source)?;
             } else {
                 if file.service(&service).is_none() {
                     bail!(services::unknown(&service));
                 }
+                let _lock = ready(ctx, &mut file, &service, &mut a.source)?;
                 set(ctx, &mut file, &service, a.source)?;
             }
         }
-        SecretCmd::SetCustom(a) => {
+        SecretCmd::SetCustom(mut a) => {
             super::refuse(&[
                 (a.refresh.is_some(), "--refresh"),
                 (a.no_verify || a.show_error, "--no-verify/--show-error"),
@@ -68,6 +85,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 warn_unresolved(&hosts);
             }
             let name = a.env.to_ascii_lowercase().replace('_', "-");
+            let _lock = ready(ctx, &mut file, &name, &mut a.source)?;
             file.custom.retain(|c| c.name != name);
             file.custom.push(CustomService {
                 name: name.clone(),
@@ -77,7 +95,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             set(ctx, &mut file, &name, a.source)?;
         }
         SecretCmd::Ls(a) => ls(ctx, &file, &a)?,
-        SecretCmd::Rm(a) => rm(ctx, &mut file, a)?,
+        SecretCmd::Rm(a) => {
+            let _lock = locked(ctx, &mut file)?;
+            rm(ctx, &mut file, a)?
+        }
         SecretCmd::Import(_) => {
             return Err(Unsupported("`bento secret import` is not implemented yet".into()).into());
         }
@@ -508,6 +529,28 @@ fn bind<R: Runner>(
     Ok(sb.is_running() && !env.is_empty() && ctx.vm.refresh_credentials(&sb.machine, &env).is_ok())
 }
 
+/// Locks the secrets file and reads it again, so a change saved while holding the lock keeps
+/// what other commands saved. Taken after any prompt: every create and start waits for it.
+fn locked<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile) -> Result<std::fs::File> {
+    let lock = crate::config::lock(&ctx.paths.secrets_file())?;
+    *file = SecretsFile::load(&ctx.paths)?;
+    Ok(lock)
+}
+
+/// For `secret set`, once its arguments are checked: asks for the value when no source was
+/// given, then `locked`.
+fn ready<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    service: &str,
+    src: &mut SecretSource,
+) -> Result<std::fs::File> {
+    if src.token.is_none() && !src.value_stdin && src.reference.is_none() && src.command.is_none() {
+        src.token = Some(read_value(ctx, service)?);
+    }
+    locked(ctx, file)
+}
+
 fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
     if !ctx.can_prompt() {
         bail!("no terminal to prompt on; pass -t, --ref or --command");
@@ -783,22 +826,24 @@ fn revoke<R: Runner>(
 /// `bento rm`: forget a sandbox's policy and, with `secrets`, its own secrets.
 pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Result<()> {
     if secrets {
-        let mut file = SecretsFile::load(&ctx.paths)?;
-        let gone = file.remove_sandbox(name);
-        let registries = file.remove_sandbox_registries(name);
-        file.save(&ctx.paths)?;
+        let (gone, registries) = SecretsFile::update(&ctx.paths, |file| {
+            Ok((
+                file.remove_sandbox(name),
+                file.remove_sandbox_registries(name),
+            ))
+        })?;
         forget(ctx, &gone)?;
         forget_registries(ctx, &registries)?;
     }
-    let mut policy = Policy::load(&ctx.paths)?;
-    policy.forget_sandbox(name);
-    policy.save(&ctx.paths)
+    Policy::update(&ctx.paths, |p| {
+        p.forget_sandbox(name);
+        Ok(())
+    })
 }
 
 /// `bento reset` without --preserve-secrets.
 pub fn forget_all<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
-    let file = SecretsFile::load(&ctx.paths)?;
-    SecretsFile::default().save(&ctx.paths)?;
+    let file = SecretsFile::update(&ctx.paths, |f| Ok(std::mem::take(f)))?;
     forget(ctx, &file.secrets)?;
     forget_registries(ctx, &file.registries)
 }

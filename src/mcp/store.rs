@@ -102,6 +102,11 @@ impl McpFile {
     pub fn save(&self, paths: &Paths) -> Result<()> {
         config::save_toml(&paths.mcp_file(), self)
     }
+
+    /// Loads, changes and saves the file under its lock (`config::update_toml`).
+    pub fn update<T>(paths: &Paths, f: impl FnOnce(&mut McpFile) -> Result<T>) -> Result<T> {
+        config::update_toml(&paths.mcp_file(), f)
+    }
 }
 
 #[cfg(test)]

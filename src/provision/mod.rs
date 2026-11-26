@@ -301,7 +301,7 @@ pub fn may_host<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<bool> {
 
 /// The policy, asking for a network policy the first time one is needed (sbx behaviour).
 pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
-    let mut policy = Policy::load(&ctx.paths)?;
+    let policy = Policy::load(&ctx.paths)?;
     if policy.mode.is_some() {
         return Ok(policy);
     }
@@ -316,14 +316,17 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     err.flush()?;
     drop(err);
     let line = ctx.read_line()?;
-    policy.mode = Some(match line.trim() {
+    let mode = match line.trim() {
         "1" | "allow-all" => Mode::AllowAll,
         "" | "2" | "balanced" => Mode::Balanced,
         "3" | "deny-all" => Mode::DenyAll,
         other => bail!("'{other}' isn't 1, 2 or 3"),
-    });
-    policy.save(&ctx.paths)?;
-    Ok(policy)
+    };
+    // Another command may have chosen one while this one asked.
+    Policy::update(&ctx.paths, |p| {
+        p.mode.get_or_insert(mode);
+        Ok(p.clone())
+    })
 }
 
 /// What `req`'s `--static-mcp` attaches, if given; `builtin` says the agent is a built-in one,
@@ -487,7 +490,7 @@ pub fn prepare_create<R: Runner>(
     }
     if !added.is_empty() {
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
-        policy.save(&ctx.paths)?;
+        policy = policy.save_rules(&ctx.paths, &req.name, &added)?;
     }
     req.rec.host_access = compile::host_access(&policy, &req.name);
     req.network = compile::network(
@@ -922,13 +925,13 @@ pub fn create_with<R: Runner>(
         };
     if gone {
         // Best effort: the create error is what matters.
-        if !added.is_empty()
-            && let Ok(mut policy) = Policy::load(&ctx.paths)
-        {
-            for id in &added {
-                policy.remove_rules(Some(&req.name), Some(id), None, None, None, None);
-            }
-            let _ = policy.save(&ctx.paths);
+        if !added.is_empty() {
+            let _ = Policy::update(&ctx.paths, |policy| {
+                for id in &added {
+                    policy.remove_rules(Some(&req.name), Some(id), None, None, None, None);
+                }
+                Ok(())
+            });
         }
         if let Some(repo) = added_remote {
             let _ = clone::remove_remote(repo, &req.name);
@@ -955,17 +958,15 @@ fn plan_services<R: Runner>(
 /// Removes the install-phase kit rules of `name` that an interrupted create or `kit add` left in
 /// the policy.
 fn drop_stale_install_rules<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
-    let mut policy = Policy::load(&ctx.paths)?;
-    let stale: Vec<String> = policy
-        .rules_for(Some(name))
-        .filter(|(r, s)| s.is_some() && r.is_kit_install())
-        .map(|(r, _)| r.id.clone())
-        .collect();
-    if !stale.is_empty() {
+    Policy::update(&ctx.paths, |policy| {
+        let stale: Vec<String> = policy
+            .rules_for(Some(name))
+            .filter(|(r, s)| s.is_some() && r.is_kit_install())
+            .map(|(r, _)| r.id.clone())
+            .collect();
         policy.remove_rules_by_ids(name, &stale);
-        policy.save(&ctx.paths)?;
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Removes a new sandbox's install-phase kit rules from the policy and returns its network
@@ -975,9 +976,10 @@ fn drop_install_rules<R: Runner>(
     req: &CreateRequest,
     ids: &[String],
 ) -> Result<NetworkSpec> {
-    let mut policy = Policy::load(&ctx.paths)?;
-    policy.remove_rules_by_ids(&req.name, ids);
-    policy.save(&ctx.paths)?;
+    let policy = Policy::update(&ctx.paths, |policy| {
+        policy.remove_rules_by_ids(&req.name, ids);
+        Ok(policy.clone())
+    })?;
     Ok(compile::network(
         &policy,
         &req.name,

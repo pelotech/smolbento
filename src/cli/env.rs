@@ -116,7 +116,7 @@ fn host_phase<R: Runner>(
 
 /// Prints what applying would do and whether it would ask. Changes nothing.
 fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, o: &EnvOverrideOpts) -> Result<i32> {
-    let (loaded, spec, _) = prepare(ctx, c, o)?;
+    let (loaded, spec) = prepare(ctx, c, o)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let plan = planned(ctx, &loaded, &spec, exists, o.skip_host_commands)?;
     let status = match plan.need {
@@ -150,7 +150,7 @@ fn apply<R: Runner>(
     attach: bool,
 ) -> Result<EnvSpec> {
     refuse_cloud(a)?;
-    let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
+    let (loaded, spec) = prepare(ctx, c, &a.overrides)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     if exists && !attach {
         bail!(
@@ -168,7 +168,7 @@ fn apply<R: Runner>(
     host_phase(ctx, Phase::Initialize, initialize, &vars, skip)?;
     if !exists {
         // Created first and attached to afterwards, so `postCreate` runs in between.
-        provision(ctx, &mut secrets, &spec)?;
+        provision(ctx, &spec)?;
         create_sandbox(ctx, &spec, &vars, skip)?;
     }
     Ok(spec)
@@ -348,11 +348,12 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         None => {}
     }
     if !pruned.is_empty() {
-        let mut secrets = SecretsFile::load(&ctx.paths)?;
-        for (service, _) in &pruned {
-            secrets.bindings.remove(service);
-        }
-        secrets.save(&ctx.paths)?;
+        SecretsFile::update(&ctx.paths, |secrets| {
+            for (service, _) in &pruned {
+                secrets.bindings.remove(service);
+            }
+            Ok(())
+        })?;
         let file = ctx.paths.secrets_file();
         writeln!(
             &ctx.out,
@@ -373,11 +374,11 @@ fn prepare<R: Runner>(
     ctx: &Ctx<R>,
     c: &EnvCommon,
     o: &EnvOverrideOpts,
-) -> Result<(Loaded, EnvSpec, SecretsFile)> {
+) -> Result<(Loaded, EnvSpec)> {
     let loaded = load_files(ctx, &c.paths, &c.env_arg, &c.env_args_file)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     let spec = spec(&loaded, c.name.as_deref(), o, &secrets)?;
-    Ok((loaded, spec, secrets))
+    Ok((loaded, spec))
 }
 
 /// Applying an approved, unchanged environment asks nothing. Otherwise `--force` approves this
@@ -438,7 +439,7 @@ fn shell_word(s: &str) -> String {
 
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
 /// stored; a later failure (the create, say) leaves them for `env rm`, as in sbx.
-fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec) -> Result<()> {
+fn provision<R: Runner>(ctx: &Ctx<R>, spec: &EnvSpec) -> Result<()> {
     if spec.secrets.is_empty()
         && spec.registries.is_empty()
         && spec.mcp.is_empty()
@@ -450,6 +451,9 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
     for (name, url) in &spec.mcp {
         crate::mcp::check_reachable(name, url)?;
     }
+    // Held while this stores, on what the file holds now.
+    let _lock = crate::config::lock(&ctx.paths.secrets_file())?;
+    let mut secrets = SecretsFile::load(&ctx.paths)?;
     let scope = scope_for(Some(&spec.name));
     let mut sources = Vec::new();
     for (service, decl) in &spec.secrets {
@@ -483,12 +487,12 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
             (_, Some(_)) => "reference",
             _ => "command",
         };
-        super::secret::store(ctx, secrets, service, source)?;
+        super::secret::store(ctx, &mut secrets, service, source)?;
         writeln!(out, "  ✓ {service} — secret · {kind}")?;
     }
     for (entry, value) in logins {
         let host = entry.host.clone();
-        super::secret::put_registry(ctx, secrets, entry, &value)?;
+        super::secret::put_registry(ctx, &mut secrets, entry, &value)?;
         writeln!(out, "  ✓ {host} — registry")?;
     }
     // As in sbx, an MCP server is registered for the host and stays after `env rm`.

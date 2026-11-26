@@ -165,6 +165,11 @@ impl SecretsFile {
         crate::config::save_toml(&paths.secrets_file(), self)
     }
 
+    /// Loads, changes and saves the file under its lock (`config::update_toml`).
+    pub fn update<T>(paths: &Paths, f: impl FnOnce(&mut SecretsFile) -> Result<T>) -> Result<T> {
+        crate::config::update_toml(&paths.secrets_file(), f)
+    }
+
     /// A built-in or custom service, with the domains bound to it added to its hosts.
     pub fn service(&self, name: &str) -> Option<Service> {
         let mut service = services::builtin(name).or_else(|| {

@@ -40,6 +40,29 @@ fn stop_running<R: Runner>(ctx: &Ctx<R>) {
 }
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
+    // Asked, and the sandboxes stopped, before the lock: every start and create waits for it.
+    if let PolicyCmd::Reset { force } = cmd {
+        confirm(
+            ctx,
+            "Remove every policy rule and the chosen mode? Running sandboxes will be stopped.",
+            force,
+        )?;
+        stop_running(ctx);
+    }
+    // Held from the load to the save by the commands that change the policy: a concurrent create
+    // or policy change would be lost otherwise.
+    let changes = matches!(
+        cmd,
+        PolicyCmd::Init { .. }
+            | PolicyCmd::Allow { .. }
+            | PolicyCmd::Deny { .. }
+            | PolicyCmd::Rm { .. }
+            | PolicyCmd::Reset { .. }
+            | PolicyCmd::Approval(ApprovalCmd::Respond { .. })
+    );
+    let _lock = changes
+        .then(|| crate::config::lock(&ctx.paths.policy_file()))
+        .transpose()?;
     let mut policy = Policy::load(&ctx.paths)?;
     match cmd {
         PolicyCmd::Init { mode, sandbox } => {
@@ -85,13 +108,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Check {
             kind: CheckKind::Network(a),
         } => return check(ctx, &policy, &a),
-        PolicyCmd::Reset { force } => {
-            confirm(
-                ctx,
-                "Remove every policy rule and the chosen mode? Running sandboxes will be stopped.",
-                force,
-            )?;
-            stop_running(ctx);
+        PolicyCmd::Reset { .. } => {
             policy.reset();
             policy.save(&ctx.paths)?;
             writeln!(

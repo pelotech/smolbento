@@ -381,6 +381,43 @@ pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     )
 }
 
+/// Loads, changes and saves a TOML file holding its lock (`lock`), so concurrent bento commands
+/// don't drop each other's changes. Saved only when `f` changed it.
+pub fn update_toml<T, R>(path: &Path, f: impl FnOnce(&mut T) -> Result<R>) -> Result<R>
+where
+    T: Default + DeserializeOwned + Serialize,
+{
+    let _lock = lock(path)?;
+    let mut value: T = load_toml(path)?;
+    let before = toml::to_string(&value)?;
+    let r = f(&mut value)?;
+    if toml::to_string(&value)? != before {
+        save_toml(path, &value)?;
+    }
+    Ok(r)
+}
+
+/// An exclusive lock for changing `path`, across processes and threads, held until the file is
+/// dropped. Not reentrant: taking it again while holding it hangs. On a sibling `<path>.lock`:
+/// `write_atomic` replaces `path` itself, so a lock on it would be on the old file.
+pub fn lock(path: &Path) -> Result<fs::File> {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let lock = PathBuf::from(name);
+    if let Some(dir) = lock.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .with_context(|| format!("opening {}", lock.display()))?;
+    f.lock()
+        .with_context(|| format!("locking {}", lock.display()))?;
+    Ok(f)
+}
+
 /// What `write_atomic` does when `path` is a symlink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Symlink {
@@ -528,6 +565,40 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    /// Concurrent bento commands each load, change and save: none may drop another's change.
+    #[test]
+    fn concurrent_updates_keep_every_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("n.toml");
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    update_toml(&path, |m: &mut BTreeMap<String, u32>| {
+                        // Widen the window between the load and the save.
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        m.insert(format!("k{i}"), i);
+                        Ok(())
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let m: BTreeMap<String, u32> = load_toml(&path).unwrap();
+        assert_eq!(m.len(), 8, "{m:?}");
+    }
+
+    #[test]
+    fn an_update_that_changes_nothing_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("n.toml");
+        update_toml(&path, |_: &mut BTreeMap<String, u32>| Ok(())).unwrap();
+        assert!(!path.exists());
+    }
 
     fn entries(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = fs::read_dir(dir)

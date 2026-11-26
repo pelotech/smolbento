@@ -132,6 +132,12 @@ impl Store {
         Ok(())
     }
 
+    /// Held around each change to the index and the packs it names (`config::lock`): beside
+    /// the store, which then holds templates only.
+    fn lock(&self) -> Result<std::fs::File> {
+        config::lock(&self.dir)
+    }
+
     fn read(&self) -> Result<Index> {
         let path = self.dir.join(INDEX);
         match std::fs::read_to_string(&path) {
@@ -206,6 +212,7 @@ impl Store {
 
     /// Deletes `.tmp-*` dirs and unindexed packs last modified more than `age` ago.
     fn sweep(&self, age: std::time::Duration) -> Result<()> {
+        let _lock = self.lock()?;
         let indexed: Vec<String> = self.read()?.templates.into_iter().map(|e| e.id).collect();
         for entry in std::fs::read_dir(&self.dir)?.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -239,6 +246,8 @@ impl Store {
         let id = sha256_prefix(pack)?;
         let size = std::fs::metadata(pack)?.len();
         let entry = Entry { id, size, ..meta };
+        // From the move in: until it's indexed, a concurrent change could drop the pack.
+        let _lock = self.lock()?;
         let dest = self.pack(&entry);
         if std::fs::rename(pack, &dest).is_err() {
             // Another filesystem (tests, or a pack built elsewhere).
@@ -264,6 +273,7 @@ impl Store {
     }
 
     pub fn remove(&self, e: &Entry) -> Result<()> {
+        let _lock = self.lock()?;
         let mut index = self.read()?;
         index.templates.retain(|t| t.full() != e.full());
         self.write(&index)?;
@@ -449,6 +459,26 @@ mod tests {
         s.remove(&e).unwrap();
         assert!(s.list().unwrap().is_empty());
         assert!(!s.pack(&e).exists());
+    }
+
+    /// Two `template save` runs at once: neither index entry is lost (a lost one's pack would be
+    /// swept as unindexed).
+    #[test]
+    fn concurrent_adds_keep_every_entry() {
+        let (dir, s) = store();
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (s, p) = (
+                    Store { dir: s.dir.clone() },
+                    pack(dir.path(), &format!("{i}")),
+                );
+                std::thread::spawn(move || s.add(meta(&format!("chk-tpl:v{i}")), &p).unwrap())
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(s.list().unwrap().len(), 8);
     }
 
     #[test]
