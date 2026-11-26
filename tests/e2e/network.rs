@@ -34,7 +34,7 @@ pub(crate) fn host_loopback_is_unreachable() {
         got
     });
     let e = E2e::new("lo");
-    e.create_alpine();
+    e.create_alpine_offline();
     let probe = format!(
         "gw=$(ip route | awk '/default/ {{print $3}}'); echo probe | nc -w 3 \"$gw\" {port}; true"
     );

@@ -356,7 +356,7 @@ pub(crate) fn built_in_agent_lists_and_signs_but_cannot_remove_keys() {
 /// `git_signing_gives_a_workload_agent_git_signatures_only`; no grant, no agent by
 /// `a_v3_workload_without_a_grant_gets_no_agent` in `src/provision/tests.rs`.)
 #[test]
-#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+#[ignore = "boots real VMs and pulls alpine/git; run with `just e2e`"]
 pub(crate) fn kit_ssh_agent_install_grant_reaches_only_install_hooks() {
     let mut e = E2e::new("sshkit");
     let agent = ThrowawayAgent::start(&e, 2);
@@ -364,18 +364,11 @@ pub(crate) fn kit_ssh_agent_install_grant_reaches_only_install_hooks() {
     let reg = Registry::start(&e);
     let workload = reg.push(
         "ssh-workload",
-        Image::alpine(),
+        Image::git_agent(),
         descriptor(
             "workload",
             &[],
-            serde_json::json!([
-                {"type": "com.docker.sandbox/sbx@1"},
-                {"type": "com.docker.sandbox/lifecycle@1",
-                 "config": {"install": [
-                     {"command": add_agent_hook(), "user": "0"},
-                     {"command": "apk add -q openssh-client openssh-keygen", "user": "0"},
-                 ]}},
-            ]),
+            serde_json::json!([{"type": "com.docker.sandbox/sbx@1"}]),
         ),
     );
     let install_only = reg.push(
@@ -388,7 +381,7 @@ pub(crate) fn kit_ssh_agent_install_grant_reaches_only_install_hooks() {
                 {"type": "com.docker.sandbox/ssh-agent@1", "config": {"phase": "install"}},
                 {"type": "com.docker.sandbox/lifecycle@1",
                  "config": {"install": [
-                     {"command": "apk add -q openssh-client && ssh-add -l > /etc/e2e-install-keys",
+                     {"command": "ssh-add -l > /etc/e2e-install-keys",
                       "user": "0", "env": ["SSH_AUTH_SOCK"]},
                  ]}},
             ]),

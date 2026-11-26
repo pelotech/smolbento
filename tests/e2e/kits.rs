@@ -58,19 +58,19 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
 pub(crate) fn a_kit_declaring_dockerd_finds_the_engine_at_startup() {
     let mut e = E2e::new("dockerd");
     e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
-    let kit = e.v3_kit_dir(
+    let reg = Registry::start(&e);
+    let kit = reg.push(
         "engine",
-        r#"# syntax=docker/sandbox-kit:3
-schemaVersion: "3"
-kind: mixin
-version: "1.0.0"
-capabilities:
-  - type: com.docker.sandbox/dockerd@1
-  - type: com.docker.sandbox/lifecycle@1
-    config:
-      startup:
-        - command: "docker info >/tmp/dinfo 2>&1"
-"#,
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &[],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/dockerd@1"},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"startup": [{"command": "docker info >/tmp/dinfo 2>&1"}]}},
+            ]),
+        ),
     );
     e.create(
         &e.name,
@@ -284,25 +284,18 @@ build: |
 /// binding your own directory instead is `mount_binds_a_host_directory_instead_of_the_managed_one`
 /// in `src/cli/request_tests.rs`.)
 #[test]
-#[ignore = "boots real VMs and pulls debian; run with `just e2e`"]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn kit_host_mount_shared_and_kept() {
     const SHARED: &str = "/home/agent/.e2e-shared";
     let e = E2e::new("hostmount");
     // A pushed kit rather than a `build:` one, so this test stays out of the serial builder group
     // (building is covered by `local_v3_kit_builds_in_the_builder_sandbox`).
     let reg = Registry::start(&e);
-    let base = Image::pull("debian:bookworm-slim");
-    let passwd = base.file("etc/passwd") + "agent:x:1000:1000::/home/agent:/bin/bash\n";
-    let group = base.file("etc/group") + "agent:x:1000:\n";
-    let mut image = base.with_files(&[
-        ("etc/passwd", &passwd),
-        ("etc/group", &group),
-        ("home/agent/.keep", ""),
-    ]);
+    let mut image = Image::alpine_agent().with_file("home/agent/.keep", "");
     let c = &mut image.config["config"];
     c["User"] = "agent".into();
     c["Entrypoint"] = serde_json::Value::Null;
-    c["Cmd"] = serde_json::json!(["bash"]);
+    c["Cmd"] = serde_json::json!(["sh"]);
     let kit = reg.push(
         "hostmount",
         image,
