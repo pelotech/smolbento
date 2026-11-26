@@ -26,6 +26,15 @@ pub fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
     union
 }
 
+/// Flushes `f` to disk. Unit tests skip it: on macOS `sync_all` is `F_FULLFSYNC`, which made
+/// up over half of `just test`.
+pub fn sync(f: &std::fs::File) -> std::io::Result<()> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    f.sync_all()
+}
+
 /// Single-quotes `s` for `sh -c`.
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))

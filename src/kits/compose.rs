@@ -256,7 +256,7 @@ fn ensure_tar(path: &Path, build: impl FnOnce(&mut fs::File) -> Result<()>) -> R
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     build(tmp.as_file_mut())?;
-    tmp.as_file().sync_all()?;
+    crate::util::sync(tmp.as_file())?;
     persist(tmp, path)?;
     Ok(())
 }
