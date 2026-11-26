@@ -409,10 +409,17 @@ fn kit_create(
     fail_install: bool,
     deny_network: &[String],
 ) -> (TestEnv, Result<Sandbox>, [String; 2]) {
+    kit_create_in(deny_all_env(), fail_install, deny_network)
+}
+
+fn kit_create_in(
+    t: TestEnv,
+    fail_install: bool,
+    deny_network: &[String],
+) -> (TestEnv, Result<Sandbox>, [String; 2]) {
     use crate::kits::apply::KitSteps;
     use crate::policy::Decision;
     use crate::sandbox::KitFirstStart;
-    let t = deny_all_env();
     let mut policy = Policy::load(&t.ctx.paths).unwrap();
     let mut add = |host: &str, via: &str| {
         policy
@@ -662,6 +669,19 @@ fn a_failed_kit_install_removes_the_sandbox_and_every_kit_rule() {
     );
     let p = Policy::load(&t.ctx.paths).unwrap();
     assert!(!p.sandboxes.contains_key("s1"), "{p:?}");
+}
+
+#[test]
+fn a_failed_hosted_create_forgets_its_egress_state() {
+    let mut t = deny_all_env();
+    let (_ctl, _tmp) = with_services(&mut t);
+    let (t, result, _) = kit_create_in(t, true, &[]);
+    assert!(result.is_err());
+    assert!(
+        t.calls()
+            .contains(&"machine delete -n sbx-s1 -f".to_string())
+    );
+    assert!(!t.ctx.paths.egress("s1").exists());
 }
 
 #[test]

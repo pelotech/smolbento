@@ -2,7 +2,7 @@
 
 use super::filter::PolicySource;
 use crate::policy::compile::{HOST_GATEWAY, decide};
-use egress_front::{Decision, Flow};
+use egress_front::{Decision, Flow, FlowKind};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -58,6 +58,14 @@ impl Rules {
                 // wins. Allow-all and presets never reach here, as they would have allowed the
                 // name.
                 Some(n) if !n.allowed && !(n.implicit && v.allowed) => (false, n.reason),
+                // TLS without an SNI or HTTP without one `Host:` hides its name: only an address
+                // allow (or allow-all) admits it, not smolvm's admission of some name. A deny rule
+                // keeps its own reason.
+                None if flow.kind != FlowKind::Other && !v.allowed => {
+                    let why = "TLS without a server name, or HTTP without one Host:, needs an IP or \
+                               CIDR allow";
+                    (false, if v.implicit { why.into() } else { v.reason })
+                }
                 // By address, only a deny rule refuses: smolvm's allow list already admitted it.
                 _ => (v.allowed || v.implicit, v.reason),
             }
@@ -170,6 +178,38 @@ mod tests {
                 "{rules:?} host_access={host_access} {f:?}"
             );
         }
+    }
+
+    #[test]
+    fn nameless_tls_and_http_need_an_address_allow() {
+        use egress_front::FlowKind::{Http, Tls};
+        let nameless = |kind, ip: &str| Flow {
+            kind,
+            ..flow(None, ip, 443)
+        };
+        let (_d, p) = test_paths();
+        save(&p, &[(true, "**.github.com")]);
+        let r = Rules::new(source(&p), false, vec![]);
+        for kind in [Tls, Http] {
+            let (d, why) = r.decide(&nameless(kind, "140.82.1.1"));
+            assert_eq!(d, Deny);
+            assert!(why.contains("needs an IP or CIDR allow"), "{why}");
+        }
+        save(&p, &[(true, "10.0.0.0/8")]);
+        assert_eq!(ask(&r, &nameless(Tls, "10.1.2.3")), Allow);
+    }
+
+    #[test]
+    fn nameless_other_is_unchanged() {
+        let (_d, p) = test_paths();
+        Policy {
+            mode: Some(Mode::Balanced),
+            ..Policy::default()
+        }
+        .save(&p)
+        .unwrap();
+        let r = Rules::new(source(&p), false, vec![]);
+        assert_eq!(ask(&r, &flow(None, "140.82.1.1", 22)), Allow);
     }
 
     #[test]

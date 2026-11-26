@@ -137,9 +137,7 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     if sb.is_running() {
         return sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta));
     }
-    // The restarted process writes a new list.
-    let _ = std::fs::remove_file(crate::egress::unresolved_file(&ctx.paths, sb.name()));
-    restart_egress(ctx, sb);
+    before_start(ctx, sb);
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
     for w in egress_warnings(ctx, sb.name()) {
         crate::warning!("{w}");
@@ -147,9 +145,16 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     Ok(())
 }
 
+/// What a stopped sandbox needs before its start: the stale unresolved-secrets list removed
+/// (the restarted process writes a new one) and its egress process restarted.
+pub(crate) fn before_start<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
+    let _ = std::fs::remove_file(crate::egress::unresolved_file(&ctx.paths, sb.name()));
+    restart_egress(ctx, sb);
+}
+
 /// What the egress process of `sandbox` reported it couldn't resolve, as warnings. Read without
 /// waiting: nothing when it hasn't started or got that far yet.
-fn egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) -> Vec<String> {
+pub(crate) fn egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) -> Vec<String> {
     let file = crate::egress::unresolved_file(&ctx.paths, sandbox);
     let text = std::fs::read_to_string(file).unwrap_or_default();
     text.lines()
@@ -884,6 +889,9 @@ pub fn create_with<R: Runner>(
         let gone = matches!(sandbox::find(&ctx.vm, &req.name), Ok(None));
         if gone && let Err(e) = ctx.services.remove(&req.name) {
             crate::warning!("removing the host services of {}: {e:#}", req.name);
+        }
+        if gone && let Err(e) = crate::egress::forget(&ctx.paths, &req.name) {
+            crate::warning!("forgetting the egress state of {}: {e:#}", req.name);
         }
     }
     let rollback = result.is_err() && (!added.is_empty() || added_remote.is_some());

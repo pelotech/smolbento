@@ -410,6 +410,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     c.path
                 );
             }
+            check_octal_mode("volume@1", c.mode.as_deref())?;
             CapBody::Volume {
                 path,
                 tmpfs: c.tmpfs,
@@ -425,11 +426,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 );
             }
             no_colon("host-mount@1", &c.path)?;
-            if let Some(m) = &c.mode
-                && !((3..=4).contains(&m.len()) && m.bytes().all(|b| (b'0'..=b'7').contains(&b)))
-            {
-                bail!("host-mount@1 mode {m:?} must be octal");
-            }
+            check_octal_mode("host-mount@1", c.mode.as_deref())?;
             CapBody::HostMount {
                 path: c.path,
                 mode: c.mode,
@@ -962,6 +959,16 @@ struct AgentSkillsCfg {
 struct AgentSkillCfg {
     path: String,
     name: Option<String>,
+}
+
+/// A mode is 3 or 4 octal digits (`755`, `1777`): it goes to a `chmod`-style mount option.
+fn check_octal_mode(cap: &str, mode: Option<&str>) -> Result<()> {
+    if let Some(m) = mode
+        && !((3..=4).contains(&m.len()) && m.bytes().all(|b| (b'0'..=b'7').contains(&b)))
+    {
+        bail!("{cap} mode {m:?} must be octal");
+    }
+    Ok(())
 }
 
 /// smolvm's `-v` reads `:` as the host:guest separator, so a guest path can't hold one.

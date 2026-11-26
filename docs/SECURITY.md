@@ -49,10 +49,15 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
 - A hosted sandbox enforces host rules and ports by the name each connection sends (see [Hosted
   egress](network-and-secrets.md#hosted-egress)), so they stop cooperative clients, not a hostile
   agent. It can escape them three ways:
-  - send nothing for 200 ms before its name is in;
-  - send an allowed host's name (SNI or `Host:`) to any address smolvm admits, which is every
-    address under `allow-all` (domain fronting, or a server that ignores SNI);
-  - split its TLS ClientHello across records, or pad it past 16 KiB, so the connection has no name.
+  - send an allowed host's name (SNI or `Host:`) to any address smolvm admits (domain fronting, or
+    a server that ignores SNI);
+  - pipeline plain HTTP requests: only the first request's `Host:` is read;
+  - under `allow-all`, reach a host it denies by sending no name (TLS without SNI), as every
+    address is allowed.
+
+  TLS without a readable SNI, and plain HTTP without exactly one `Host:`, pass only on an IP or
+  CIDR allow rule (or `allow-all`). Protocols where the server speaks first (SMTP, FTP) don't work:
+  smolvm's interceptor waits up to 10 s for the client's first bytes, then closes the connection.
 
   With `network.egress=smolvm`, host rules are
   looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't

@@ -268,17 +268,22 @@ pub fn pinned<R: Runner>(
         fetch(ctx, base, pull, sandbox, Position::Kit, before)?
     } else {
         trust::check(&Source::Registry(base.into()), &ctx.settings)?;
-        if require {
+        let verified = if require {
             if offline {
                 bail!(
                     "kit {base}: kit.requireSignature verifies it at the registry, which --pull \
                      never can't reach"
                 );
             }
-            with_logins(ctx, sandbox, |logins| {
+            Some(with_logins(ctx, sandbox, |logins| {
                 signers::verify_registry(reference, &ctx.settings, logins)
-            })?;
-        }
+            })?)
+        } else {
+            None
+        };
+        // Load the digest the signature check verified, not whatever the tag (or a remembered
+        // tag) answers now. A recorded digest stays authoritative.
+        let digest = digest.or(verified.as_deref());
         let cache = ctx.paths.kit_cache();
         match registry::cached(base, digest, &cache, pull)? {
             Some(kit) => (kit, true),

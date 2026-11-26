@@ -202,9 +202,10 @@ Each connection is decided twice, and smolvm's allow list still applies first:
 
 - **What the guest sees**, either way: the connection opens, then resets, not refused. smolvm accepts
   it before asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.
-- A client that sends no name (SSH, TLS without SNI), or sends nothing for 200 ms before its name
-  is in, is judged by address and port only, so name rules don't apply to it. The name is whatever
-  the guest sends, so name rules stop cooperative clients, not a hostile agent: see
+- A client that speaks neither TLS nor HTTP (SSH) is judged by address and port only, so name rules
+  don't apply to it. TLS without SNI, or HTTP without one `Host:`, has no name: it passes only on an
+  IP or CIDR allow rule (or `allow-all`). The name is whatever the guest sends, so name rules stop
+  cooperative clients, not a hostile agent: see
   [Security](SECURITY.md#network-and-secrets).
 - The host's gateway (`host.docker.internal`, `100.96.0.1`) is judged strictly as `localhost:<port>`:
   only a `localhost` rule for that port opens it.
@@ -278,7 +279,9 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
   - Paths and queries follow sbx (any case) for `bento policy` rules, and the kit spec (exact case)
     for kit rules.
   - A path is judged with its dot segments resolved. One with `%2f` or `%5c`, double encoding, `%u`,
-    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
+    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`. So is a
+    target with a `#` fragment, or an encoded control byte in the query (`?q=a%0Ab`). Such a request
+    to a ruled host is refused.
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
   bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
   bounded deny on `localhost` acts on the whole host port: host services aren't decrypted. A
@@ -297,7 +300,7 @@ On a ruled host:
 - **Replies are asked for uncompressed** (`Accept-Encoding: identity`). One compressed anyway is
   decoded if it's gzip or deflate, up to 64 MiB. A br or zstd reply, or a larger one, gets `502`.
 - **WebSocket:** the upgrade request is judged. The frames after it pass unfiltered.
-- **At most 256 decrypted connections at once** per sandbox.
+- **At most 256 decrypted connections at once** per sandbox. Connections beyond that are refused.
 - **Plain HTTP is refused** (a reset, logged as `plain HTTP to a host with request rules`). The
   egress process can't judge it per request yet: use HTTPS.
 - **Other protocols pass** a host with only bounded denies, as in sbx: SSH to `github.com` still

@@ -1333,6 +1333,27 @@ fn volume_paths_are_cleaned_and_must_be_absolute() {
     );
 }
 
+fn volume_mode(mode: &str) -> Result<CapBody> {
+    let k = one_cap(&format!(
+        r#"{{"type":"com.docker.sandbox/volume@1","config":{{"path":"/v","mode":"{mode}"}}}}"#
+    ))?;
+    Ok(k.caps[0].body.clone())
+}
+
+/// volume@1's mode goes to the guest tmpfs `mode=` option, so it must be octal like host-mount@1's.
+#[test]
+fn volume_mode_must_be_octal() {
+    for mode in ["0755,size=999G,suid", "999", "75", "07555"] {
+        let e = volume_mode(mode).unwrap_err();
+        let msg = e.root_cause().to_string();
+        assert!(msg.contains("volume@1 mode"), "{msg}");
+        assert!(msg.contains("must be octal"), "{msg}");
+    }
+    for mode in ["755", "0755", "1777"] {
+        assert!(volume_mode(mode).is_ok(), "{mode}");
+    }
+}
+
 #[test]
 fn host_mount_refuses_a_colon() {
     let e = host_mount(r#"{"path":"/a:b"}"#).unwrap_err();
