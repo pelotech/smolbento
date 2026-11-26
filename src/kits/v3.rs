@@ -446,6 +446,11 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             }
         }
         "lifecycle@1" => CapBody::Lifecycle(lifecycle(decode(config)?)?),
+        // Not provided (no host clipboard reads, nor images), but checked as the spec reads it.
+        "clipboard@1" => {
+            check_clipboard(config)?;
+            CapBody::Unsupported
+        }
         "agent-context@1" => {
             let c: AgentContextV1 = decode(config)?;
             if c.content.is_some() && c.content_file.is_some() {
@@ -918,6 +923,52 @@ struct PortCfg {
     container: u16,
     transport: Option<String>,
     family: Option<String>,
+}
+
+/// `clipboard@1`: the media types each direction admits; a missing list admits every type.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipboardCfg {
+    read: Option<Vec<String>>,
+    write: Option<Vec<String>>,
+}
+
+/// clipboard@1's config rules: each entry a lowercase media type, `type/*` or `*/*`, by its
+/// canonical name and once, and an entry that turns both directions off is refused.
+fn check_clipboard(config: Option<Value>) -> Result<()> {
+    static PATTERN: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(|| {
+        let token = "[a-z0-9][a-z0-9!#$&^_.+-]*";
+        regex_lite::Regex::new(&format!(r"^(\*/\*|{token}/(\*|{token}))$")).unwrap()
+    });
+    let Some(config) = config else { return Ok(()) };
+    // A null would read as the default, which grants every type.
+    let Some(fields) = config.as_object() else {
+        bail!("config must be an object");
+    };
+    for d in ["read", "write"] {
+        if fields.get(d).is_some_and(Value::is_null) {
+            bail!("{d} must be a list of media types");
+        }
+    }
+    let c: ClipboardCfg = decode(Some(config))?;
+    for (d, list) in [("read", &c.read), ("write", &c.write)] {
+        for (i, t) in list.iter().flatten().enumerate() {
+            if !PATTERN.is_match(t) {
+                bail!("{d}: {t:?} is not a lowercase media type, type/*, or */*");
+            }
+            // Requests are judged by canonical type, so an alias would admit nothing.
+            if t == "image/x-png" {
+                bail!("{d}: {t:?} is an alias; write \"image/png\"");
+            }
+            if list.iter().flatten().take(i).any(|e| e == t) {
+                bail!("{d}: {t:?} is listed twice");
+            }
+        }
+    }
+    if c.read.is_some_and(|l| l.is_empty()) && c.write.is_some_and(|l| l.is_empty()) {
+        bail!("read and write both admit nothing; an entry granting nothing is refused");
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

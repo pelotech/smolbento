@@ -26,4 +26,4 @@ pub const CAP_NS: &str = "com.docker.sandbox/";
 pub const AGENT_HOME: &str = "/home/agent";
 
 /// Commit of docker/sandbox-kit-spec the parsers and test fixtures were written against.
-pub const SPEC_COMMIT: &str = "a4d6ca06175f2d9cac57428b8c254ba7f5f36570";
+pub const SPEC_COMMIT: &str = "7c8b7cd53acc7271184b5c66ab0acb9613df56c7";

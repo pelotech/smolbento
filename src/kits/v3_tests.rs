@@ -1458,3 +1458,50 @@ fn a_malformed_capability_type_is_refused() {
     }
     one_cap(r#"{"type":"com.example-1/x-y2@12","optional":true}"#).unwrap();
 }
+
+/// tck: clipboard@1/config-valid. smolbento doesn't provide the clipboard, but a kit asking for it
+/// is still checked as the spec reads it.
+#[test]
+fn a_clipboard_config_is_checked_though_unsupported() {
+    const CLIP: &str = "com.docker.sandbox/clipboard@1";
+    let read = |v: Option<serde_json::Value>| body(CLIP, v);
+    for ok in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({"read": ["image/*"], "write": []})),
+        Some(serde_json::json!({"read": ["*/*", "text/plain", "application/vnd.a+json"]})),
+    ] {
+        assert!(
+            matches!(read(ok.clone()), Ok(CapBody::Unsupported)),
+            "{ok:?}"
+        );
+    }
+    for (bad, why) in [
+        (serde_json::json!(null), "object"),
+        (
+            serde_json::json!({"read": [], "write": []}),
+            "admit nothing",
+        ),
+        (serde_json::json!({"read": []}), ""),
+        (serde_json::json!({"read": null}), "list"),
+        (serde_json::json!({"read": ["Text/Plain"]}), "lowercase"),
+        (
+            serde_json::json!({"read": ["text/plain;charset=utf-8"]}),
+            "lowercase",
+        ),
+        (serde_json::json!({"read": ["UTF8_STRING"]}), "lowercase"),
+        (serde_json::json!({"read": ["image"]}), "lowercase"),
+        (serde_json::json!({"read": ["*/png"]}), "lowercase"),
+        (serde_json::json!({"read": ["image/x-png"]}), "alias"),
+        (serde_json::json!({"write": ["text/*", "text/*"]}), "twice"),
+        (serde_json::json!({"copy": ["text/*"]}), "copy"),
+    ] {
+        // `read: []` alone leaves write unfiltered, so it grants something.
+        if why.is_empty() {
+            assert!(read(Some(bad)).is_ok());
+            continue;
+        }
+        let e = read(Some(bad.clone())).unwrap_err();
+        assert!(format!("{e:#}").contains(why), "{bad}: {e:#}");
+    }
+}
