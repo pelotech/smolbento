@@ -5,8 +5,8 @@ use std::io::Write;
 
 use anyhow::{Result, bail};
 
-use super::Ctx;
-use super::args::KitMountsCmd;
+use crate::cli::Ctx;
+use crate::cli::args::KitMountsCmd;
 use crate::kits::host_mount;
 use crate::sandbox;
 use crate::smolvm::Runner;
@@ -28,7 +28,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitMountsCmd) -> Result<i32> {
                         ]
                     })
                     .collect();
-                super::table(&["ID", "KIT", "PATH", "HOST PATH"], rows)
+                crate::cli::table(&["ID", "KIT", "PATH", "HOST PATH"], rows)
             });
             write!(&ctx.out, "{text}")?;
         }

@@ -5,10 +5,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::env_spec::{
-    EnvSpec, LIFECYCLE, binding_resources, header, lifecycle, lifecycle_resources, name,
-    remove_summary, resources, spec, vars,
-};
+mod spec;
+
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, EnvRunArgs,
     ExecArgs, RunArgs, SandboxOpts, SecretSource, confirm_or,
@@ -23,6 +21,10 @@ use crate::secrets::{
     RegistryEntry, SecretEntry, SecretsFile, Source, resolve::resolve, scope_for,
 };
 use crate::smolvm::Runner;
+use spec::{
+    EnvSpec, LIFECYCLE, binding_resources, header, lifecycle, lifecycle_resources, name,
+    remove_summary, resources, spec, vars,
+};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
     match cmd {
@@ -585,5 +587,4 @@ fn source<R: Runner>(
 }
 
 #[cfg(test)]
-#[path = "env_tests.rs"]
 mod tests;
