@@ -2987,7 +2987,7 @@ dependencies = [
 [[package]]
 name = "smolvm-credentials"
 version = "1.37.0"
-source = "git+https://github.com/josmo/smolvm?tag=bento-v1.37.0-hook0d03d418#34ff64c591cff82c1e491c630ff18be08d7fca9f"
+source = "git+https://github.com/josmo/smolvm?tag=bento-v1.37.0-hook67b86da2#183405bc7a236ff596b87acea55dd82dd73a50bd"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3014,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "smolvm-protocol"
 version = "1.37.0"
-source = "git+https://github.com/josmo/smolvm?tag=bento-v1.37.0-hook0d03d418#34ff64c591cff82c1e491c630ff18be08d7fca9f"
+source = "git+https://github.com/josmo/smolvm?tag=bento-v1.37.0-hook67b86da2#183405bc7a236ff596b87acea55dd82dd73a50bd"
 dependencies = [
  "base64 0.22.1",
  "serde",

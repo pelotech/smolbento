@@ -17,8 +17,8 @@ http = "1.5.0"
 # Mints the broad CA as smolvm-credentials mints its own: same version and features.
 rcgen = { version = "0.14.0", default-features = false, features = ["ring", "pem"] }
 serde_json = "1.0.154"
-smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook0d03d418", version = "1.37.0" }
-smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook0d03d418", version = "1.37.0" }
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook67b86da2", version = "1.37.0" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook67b86da2", version = "1.37.0" }
 zeroize = "1.9.2"
 
 [dev-dependencies]
