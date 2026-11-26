@@ -728,20 +728,23 @@ fn bundled_skills_merge_by_name_and_conflict_on_different_sources() {
 }
 
 #[test]
-fn resources_last_wins_and_flags_are_set() {
+/// tck: resources@1/max-of-declarations, resources@1/never-undercut-workload
+fn resources_take_the_maximum_and_flags_are_set() {
     let res = |c: Option<&str>, m: Option<&str>| CapBody::Resources {
         cpus: c.map(String::from),
         memory: m.map(String::from),
     };
-    let w = workload("w").cap("r@1", false, res(Some("2"), Some("1g")));
+    let w = workload("w").cap("r@1", false, res(Some("2"), Some("4g")));
     let m = mixin("m")
-        .cap("r@1", false, res(Some("4"), None))
+        .cap("r@1", false, res(Some("4"), Some("1024m")))
         .cap("g@1", false, CapBody::GitIdentity)
         .cap("l@1", false, CapBody::LongRunning)
         .cap("p@1", false, CapBody::Privileged);
-    let p = run(w, vec![m]).unwrap();
+    // A later mixin asking for less doesn't lower the workload's memory.
+    let low = mixin("low").cap("r@1", false, res(Some("1.5"), Some("2g")));
+    let p = run(w, vec![m, low]).unwrap();
     assert_eq!(p.merged.cpus.as_deref(), Some("4"));
-    assert_eq!(p.merged.memory.as_deref(), Some("1g"));
+    assert_eq!(p.merged.memory.as_deref(), Some("4g"));
     assert!(p.merged.git_identity && p.merged.long_running);
 }
 

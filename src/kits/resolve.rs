@@ -256,14 +256,26 @@ impl Merged {
         Ok(())
     }
 
-    /// The last kit to set a value wins.
+    /// The largest value any kit states, so a mixin never lowers the workload's (resources@1).
     fn set_resources(&mut self, cpus: &Option<String>, memory: &Option<String>) {
-        if cpus.is_some() {
-            self.cpus.clone_from(cpus);
-        }
-        if memory.is_some() {
-            self.memory.clone_from(memory);
-        }
+        keep_larger(&mut self.cpus, cpus, |v| v.trim().parse::<f64>().ok());
+        keep_larger(&mut self.memory, memory, |v| {
+            crate::util::parse_size(v, "memory").ok()
+        });
+    }
+}
+
+/// Sets `current` to `new` unless both parse (`read`) and `current` is at least as large. A value
+/// that doesn't parse stays only if no later kit states one, for `apply` to refuse.
+fn keep_larger<T: PartialOrd>(
+    current: &mut Option<String>,
+    new: &Option<String>,
+    read: impl Fn(&str) -> Option<T>,
+) {
+    let Some(n) = new else { return };
+    let at_least = |c: &str| matches!((read(c), read(n)), (Some(c), Some(n)) if c >= n);
+    if !current.as_deref().is_some_and(at_least) {
+        *current = Some(n.clone());
     }
 }
 
