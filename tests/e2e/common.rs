@@ -362,9 +362,10 @@ pub(crate) fn guest_root(sb: &str, script: &str) {
     );
 }
 
-/// Polls `check` every second until it returns true or `secs` pass.
+/// Polls `check` until it returns true or `secs` pass, backing off from 50 ms to 500 ms.
 pub(crate) fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut delay = std::time::Duration::from_millis(50);
     loop {
         if check() {
             return true;
@@ -372,7 +373,8 @@ pub(crate) fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
         if std::time::Instant::now() > deadline {
             return false;
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(delay);
+        delay = (delay * 2).min(std::time::Duration::from_millis(500));
     }
 }
 
@@ -531,15 +533,28 @@ impl Image {
         alpine.clone().with_agent_account(&alpine)
     }
 
-    /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client.
+    /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client into
+    /// a cache in the temp dir that every test process and later run shares: a pull lands in a
+    /// private dir and is renamed into place, so a reader never sees a half-written one.
     pub(crate) fn pull(reference: &str) -> Image {
-        let cache = tempfile::tempdir().unwrap();
-        let dir = smolbento::kits::registry::pull_image(
-            reference,
-            cache.path(),
-            smolbento::kits::registry_auth::Logins::none(),
-        )
-        .unwrap();
+        let uid = smolbento::util::host_uid();
+        let root = std::env::temp_dir().join(format!("sbt-e2e-oci-cache-{uid}"));
+        let key = reference.replace(['/', ':', '@'], "_");
+        let dir = root.join(&key);
+        if !dir.join("index.json").exists() {
+            let tmp = root.join(format!(".tmp-{key}-{}", std::process::id()));
+            let pulled = smolbento::kits::registry::pull_image(
+                reference,
+                &tmp,
+                smolbento::kits::registry_auth::Logins::none(),
+            )
+            .unwrap();
+            if std::fs::rename(&pulled, &dir).is_err() {
+                // Lost the race to another process, whose copy is complete.
+                assert!(dir.join("index.json").exists(), "caching {reference}");
+            }
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
         let blob = |d: &serde_json::Value| {
             let hex = d.as_str().unwrap().trim_start_matches("sha256:");
             std::fs::read(dir.join("blobs/sha256").join(hex)).unwrap()

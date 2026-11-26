@@ -5,7 +5,7 @@ use crate::bridge_agent::unit_files;
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn lifecycle_exec_and_same_path_mount() {
     let e = E2e::new("life");
-    e.create_alpine();
+    e.create_alpine_offline();
     assert_eq!(e.state(), "running");
 
     std::fs::write(e.workspace().join("from-host"), "hello").unwrap();
@@ -48,7 +48,7 @@ pub(crate) fn run_attaches_then_stops_when_the_last_session_ends() {
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn cp_round_trip() {
     let e = E2e::new("cp");
-    e.create_alpine();
+    e.create_alpine_offline();
     let src = e.dir.path().join("src.txt");
     std::fs::write(&src, "copied").unwrap();
     e.ok(&[
@@ -142,7 +142,7 @@ pub(crate) fn http_answers(e: &E2e, url: &str) -> bool {
 #[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
 pub(crate) fn policy_changes_apply_on_start_and_live() {
     let e = E2e::new("pol");
-    e.create_alpine();
+    e.create_alpine_offline();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
@@ -196,7 +196,7 @@ pub(crate) fn smolvm_allow_list_opens_and_closes_an_address_live() {
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn ports_publish_live() {
     let e = E2e::new("port");
-    e.create_alpine();
+    e.create_alpine_offline();
     smolvm_ok(&[
         "machine",
         "exec",
@@ -258,7 +258,7 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
     let mut e = E2e::new("hegr");
     e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "hosted".into()));
     e.own_httpbin_secret("TOK", BASIC_SECRET);
-    e.create_alpine();
+    e.create_alpine_offline();
     assert!(basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
     let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
@@ -444,7 +444,7 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
     e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.ok(&["policy", "init", "balanced"]);
     e.own_httpbin_secret("TOK", BASIC_SECRET);
-    e.create_alpine();
+    e.create_alpine_offline();
     let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
     assert!(
@@ -486,7 +486,7 @@ pub(crate) fn a_secret_set_after_create_is_bound_without_recreating() {
     let mut e = E2e::new("secadd");
     e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.ok(&["policy", "init", "balanced"]);
-    e.create_alpine();
+    e.create_alpine_offline();
     // Running, but booted with no bindings: smolvm takes the new one from its next start.
     let out = e.own_httpbin_secret("TOK", BASIC_SECRET);
     let next = format!("Applies to {} on their next start", e.name);
@@ -506,7 +506,7 @@ pub(crate) fn a_secret_set_after_create_binds_a_hosted_sandbox_live() {
     let mut e = E2e::new("secaddh");
     e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "hosted".into()));
     e.ok(&["policy", "init", "balanced"]);
-    e.create_alpine();
+    e.create_alpine_offline();
     let out = e.own_httpbin_secret("TOK", BASIC_SECRET);
     let now = format!("Applied to {} now", e.name);
     assert!(out.contains(&now), "{out}");
