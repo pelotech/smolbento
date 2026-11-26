@@ -3,7 +3,7 @@ members = ["crates/egress-front"]
 
 [package]
 name = "smolbento"
-version = "0.41.3"
+version = "0.41.4"
 edition = "2024"
 description = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 license = "Apache-2.0"
@@ -19,7 +19,7 @@ anyhow = "1.0.104"
 base64 = "0.23.0"
 clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"
-egress-front = { path = "crates/egress-front", version = "0.41.3" }
+egress-front = { path = "crates/egress-front", version = "0.41.4" }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 hmac = "0.13.0"
 humantime = "2.4.0"
