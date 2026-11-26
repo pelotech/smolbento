@@ -469,8 +469,15 @@ for an optional entry.
   pattern in a bounded allow entry is an error.
 - Docker's published agent kits offer both `agent-context` versions as optional, so they get `@2`;
   `docker.io/sbx/amp` requires `@1` and gets that.
-- Not done yet: the runtime's own guidance at the top of the file (smolbento writes none), a
-  size limit on the combined text, and per-file required or optional.
+- Every agent file starts with smolbento's own short guidance (sbx's is a long platform preamble)
+  and is written even when no kit has text. The spec's size budget applies to the combined text: a
+  warning above 64 KiB, a refusal above 512 KiB. smolbento counts the kits' text bytes, as it
+  builds no descriptor. A file that would land in a mounted workspace is refused when a required
+  `agent-context` asks for it (an undirected ask counts toward the first file), else skipped with
+  a warning. A kit's `agent-context` is refused at load for a `directory` without a
+  single-component `filename`, an `@2` entry with neither a `filename` nor a nonempty `content`,
+  and (v3 kits) a mixin's `filename` without a `directory`; Docker's published agent kits meet
+  all three.
 - A `host-mount@1` directory is made under `~/.local/share/smolbento/kit-host-mounts/`, keyed on the
   kit that declares it (a mixin's own, not the workload's) and the path
   ([Kits](kits.md#kit-host-mounts)). Sandboxes of the same kit share it, and `rm` keeps it.
@@ -512,7 +519,7 @@ for an optional entry.
 | Host-mount location | `~/Library/Application Support/com.docker.sandboxes/sandboxes/kit-host-mounts/` on macOS | Under smolbento's data directory, so sbx's directories aren't shared |
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
 | Smolfile kits | None | A Smolfile defines its own workload; one without a command keeps the shell agent's |
-| Agent context file | Starts with a long platform preamble | No preamble: kit text and the index only |
+| Agent context file | Starts with a long platform preamble | Starts with a one-line sandbox note, then kit text and the index |
 | Mixin context with no agent file in the workload | Dropped silently | Dropped, with a warning when `kit.showWarnings` is on |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
 | v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |

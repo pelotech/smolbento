@@ -969,7 +969,11 @@ fn expand_caps(
                 .with_context(|| format!("capability {}{at}", c.ty))?;
         }
     }
-    v3::check_caps(&k.name, &k.caps)
+    v3::check_caps(&k.name, &k.caps)?;
+    if k.v2 {
+        return Ok(());
+    }
+    v3::check_mixin_profiles(&k.name, k.kind, &k.caps)
 }
 
 /// An OAuth credential's token and resource hosts join its kit's network rules (the first entry

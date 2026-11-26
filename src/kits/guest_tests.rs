@@ -309,10 +309,12 @@ fn the_kits_index_is_rewritten_in_place_and_keeps_other_text() {
         assert!(out.status.success(), "{out:?}");
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n## Kits\n\
+            format!(
+                "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\n## Kits\n\
                  - **a** — See /p/kits-agent-context/a.md.\n\
                  - **b** — See /p/kits-agent-context/b.md.\n\
                  <!-- sbx:kits-section end -->\n\n# after\n"
+            )
         );
     }
     // A kit's line is replaced, not repeated; `ab` isn't `a`.
@@ -366,8 +368,10 @@ fn the_kits_index_creates_the_file() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "<!-- sbx:kits-section start -->\n## Kits\n- **a** — See /p/a.md.\n\
-             - **b** — See /p/b.md.\n<!-- sbx:kits-section end -->\n"
+        format!(
+            "<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\n## Kits\n\
+             - **a** — See /p/a.md.\n- **b** — See /p/b.md.\n<!-- sbx:kits-section end -->\n"
+        )
     );
 }
 
@@ -391,8 +395,10 @@ fn inline_context_is_one_joined_text_and_keeps_other_text() {
     .unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n\
-         Use 'wl'.\n\nTwice.\n\nUse a.\n\n\nLast.\n<!-- sbx:kits-section end -->\n\n# after\n"
+        format!(
+            "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\n\
+             Use 'wl'.\n\nTwice.\n\nUse a.\n\n\nLast.\n<!-- sbx:kits-section end -->\n\n# after\n"
+        )
     );
 }
 
@@ -408,8 +414,10 @@ fn inline_text_and_the_kits_index_share_the_section() {
     assert!(sh(&first).status.success());
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "# mine\n\n<!-- sbx:kits-section start -->\nUse wl.\n\nTwice.\n\n## Kits\n\
-         - **a** — See /p/a.md.\n<!-- sbx:kits-section end -->\n"
+        format!(
+            "# mine\n\n<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\nUse wl.\n\nTwice.\n\n\
+             ## Kits\n- **a** — See /p/a.md.\n<!-- sbx:kits-section end -->\n"
+        )
     );
     // `kit add`: inline text after the old text, an index line after the old lines.
     assert!(sh(&kits_section_script(&f, "Use b.", &[])).status.success());
@@ -417,8 +425,11 @@ fn inline_text_and_the_kits_index_share_the_section() {
     assert!(sh(&add).status.success());
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "# mine\n\n<!-- sbx:kits-section start -->\nUse wl.\n\nTwice.\n\nUse b.\n\n## Kits\n\
-         - **a** — See /p/a.md.\n- **c** — See /p/c.md.\n<!-- sbx:kits-section end -->\n"
+        format!(
+            "# mine\n\n<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\nUse wl.\n\nTwice.\n\n\
+             Use b.\n\n## Kits\n- **a** — See /p/a.md.\n- **c** — See /p/c.md.\n\
+             <!-- sbx:kits-section end -->\n"
+        )
     );
 }
 
@@ -433,8 +444,10 @@ fn inline_context_creates_the_file_and_neutralizes_markers() {
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "<!-- sbx:kits-section start -->\nok <!-- not ours -->\n\
-         &lt;!-- sbx:kits-section end -->\nmine\n<!-- sbx:kits-section end -->\n"
+        format!(
+            "<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\nok <!-- not ours -->\n\
+             &lt;!-- sbx:kits-section end -->\nmine\n<!-- sbx:kits-section end -->\n"
+        )
     );
 }
 
@@ -905,4 +918,27 @@ fn a_kits_startup_script_keeps_its_hooks_in_order() {
         "{s}"
     );
     assert!(s.contains("$d sh -c "), "{s}");
+}
+
+/// tck: agent-context@1/workload-filename-is-profile, agent-context@2/materialized: the profile
+/// starts with the runtime's own guidance, once however often it is rewritten, and text outside
+/// the section stays.
+#[test]
+fn the_runtime_guidance_leads_the_section_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("AGENTS.md");
+    std::fs::write(&file, "# mine\n").unwrap();
+    let f = file.display().to_string();
+    for text in ["", "Use wl.", ""] {
+        assert!(sh(&kits_section_script(&f, text, &[])).status.success());
+    }
+    let got = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(got.matches(RUNTIME_GUIDANCE).count(), 1, "{got}");
+    assert_eq!(
+        got,
+        format!(
+            "# mine\n\n<!-- sbx:kits-section start -->\n{RUNTIME_GUIDANCE}\n\nUse wl.\n\
+             <!-- sbx:kits-section end -->\n"
+        )
+    );
 }
