@@ -4,7 +4,6 @@
 //! nothing about the sandbox itself: whether that exists is smolvm's to say.
 
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -64,10 +63,9 @@ pub fn save(
     resources: &[Resource],
     now: i64,
 ) -> Result<()> {
-    let at = UNIX_EPOCH + Duration::from_secs(now.max(0) as u64);
     let record = Record {
         files: file_names(files),
-        approved_at: humantime::format_rfc3339_seconds(at).to_string(),
+        approved_at: crate::util::rfc3339(now),
         approved: resources.to_vec(),
     };
     // Private: it holds what the plan shows, env values and commands included.

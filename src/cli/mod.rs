@@ -327,12 +327,6 @@ pub fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// Unix seconds as an RFC 3339 UTC time.
-pub fn rfc3339(secs: i64) -> String {
-    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs.max(0) as u64);
-    humantime::format_rfc3339_seconds(at).to_string()
-}
-
 /// The `s` of `n things`.
 pub fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }

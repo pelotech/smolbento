@@ -64,7 +64,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
             status: status(s.state),
             ports: &s.ports,
             workspace: s.meta.workspace.as_deref(),
-            created_at: super::rfc3339(s.meta.created),
+            created_at: crate::util::rfc3339(s.meta.created),
             fork_of: s.meta.fork_of.as_deref(),
         })
         .collect();

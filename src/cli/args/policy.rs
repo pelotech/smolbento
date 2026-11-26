@@ -116,6 +116,7 @@ pub struct PolicyRmArgs {
     /// Only this sandbox's rules
     #[arg(long)]
     pub sandbox: Option<String>,
+    // Accepted as sbx does, and never read: `policy rm` doesn't ask.
     /// Don't ask for confirmation
     #[arg(short = 'f', long)]
     pub force: bool,

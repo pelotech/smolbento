@@ -2,6 +2,7 @@
 
 mod client;
 mod error;
+#[cfg(test)]
 pub mod fake;
 pub mod install;
 pub mod locate;
@@ -84,16 +85,7 @@ fn trace_line(args: &[String]) -> String {
 /// and a count, as a guest command's arguments can be tokens. Secret values reach smolvm in its
 /// env, which is never shown.
 fn shown(args: &[String]) -> String {
-    let quoted = |a: &str| {
-        let plain = !a.is_empty()
-            && a.chars()
-                .all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c));
-        if plain {
-            a.to_string()
-        } else {
-            crate::util::sh_quote(a)
-        }
-    };
+    let quoted = crate::util::shell_word;
     let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
     let mut words: Vec<String> = args[..end]
         .iter()

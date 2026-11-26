@@ -285,12 +285,7 @@ fn verify<R: Runner>(
 
 /// Writes a file `kit pack` or `kit pull` produces, whole or not at all, mode 0644.
 fn write_output(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let parent = path.parent().context("an output path has a directory")?;
-    let tmp = tempfile::NamedTempFile::new_in(parent)?;
-    std::fs::write(tmp.path(), bytes)?;
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))?;
-    crate::kits::registry::persist(tmp, path)
+    crate::config::write_atomic(path, bytes, Some(0o644), crate::config::Symlink::Follow)
 }
 
 /// `kit pull`: saves the payload of the v2 kit at REFERENCE (its files, as a tar.gz).

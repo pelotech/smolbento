@@ -15,6 +15,22 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
         .with_context(|| format!("setting the mode of {}", dir.display()))
 }
 
+/// Unix seconds as an RFC 3339 UTC time.
+pub fn rfc3339(secs: i64) -> String {
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs.max(0) as u64);
+    humantime::format_rfc3339_seconds(at).to_string()
+}
+
+/// `s` as one shell word: as is when that's safe, else single-quoted.
+pub fn shell_word(s: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c);
+    if !s.is_empty() && s.chars().all(plain) {
+        s.to_string()
+    } else {
+        sh_quote(s)
+    }
+}
+
 /// The distinct `values`, in the order first seen.
 pub fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut union: Vec<String> = Vec::new();

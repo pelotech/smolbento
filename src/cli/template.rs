@@ -197,7 +197,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             image: sb.image.clone().unwrap_or_default(),
             kits: sb.meta.rec.kits.clone(),
             command: sb.meta.rec.command.clone().unwrap_or_default(),
-            created_at: super::rfc3339(ctx.now),
+            created_at: crate::util::rfc3339(ctx.now),
             ..Default::default()
         },
         &tmp.path().join("pack.smolmachine"),
