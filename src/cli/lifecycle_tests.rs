@@ -1278,6 +1278,17 @@ fn prune_removes_only_old_stopped_sandboxes() {
     assert_eq!(deletes, vec!["machine delete -n sbx-old -f"]);
 }
 
+/// A duration longer than the clock can count back means "older than ever": nothing is pruned,
+/// rather than the subtraction wrapping into the future and pruning everything.
+#[test]
+fn prune_until_a_huge_duration_removes_nothing() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("old", "stopped", CLAUDE_LABELS)]);
+    t.sbt(&["prune", "-f", "--filter", "until=500000000000years"])
+        .unwrap();
+    assert!(!t.calls().iter().any(|l| l.contains("delete")));
+}
+
 /// The builder is shared by every setup on the smolvm home, and keeps their build cache: only
 /// naming it (or `reset`) removes it.
 #[test]
@@ -1653,4 +1664,19 @@ fn reset_removes_the_skills_store() {
     std::fs::create_dir_all(t.ctx.paths.skills_metadata()).unwrap();
     t.sbt(&["reset", "-f"]).unwrap();
     assert!(!store.exists() && !t.ctx.paths.skills_metadata().exists());
+}
+
+#[test]
+fn start_clears_a_stale_unresolved_secrets_list() {
+    // The egress process writes a new one; an old one would warn about secrets that resolve now.
+    let mut t = test_env(&[]);
+    t.runner().ok(
+        &["machine", "status"],
+        &json("sbx-claude-proj", "stopped", "claude-proj"),
+    );
+    let stale = crate::egress::unresolved_file(&t.ctx.paths, "claude-proj");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, "GITHUB_TOKEN\n").unwrap();
+    t.sbt(&["start", "claude-proj"]).unwrap();
+    assert!(!stale.exists(), "{}", stale.display());
 }

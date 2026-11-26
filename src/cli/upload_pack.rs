@@ -26,7 +26,12 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
         .map(|p| ("GIT_PROTOCOL".to_string(), p.clone()));
     let code = ctx.vm.exec(&ExecSpec {
         name: sb.machine.clone(),
-        user: Some("agent".into()),
+        // The clone's owner (clone_step): the user part of the session user.
+        user: Some(
+            sandbox::labels::split_user(sb.meta.rec.session_user())
+                .0
+                .into(),
+        ),
         env: env.into_iter().collect(),
         interactive: true,
         cmd: vec!["git-upload-pack".into(), dir],
@@ -103,6 +108,26 @@ mod tests {
             ]]
         );
         assert!(!stopped(&t));
+    }
+
+    /// The clone belongs to the session user (a workload image's own), who runs the fetch too.
+    #[test]
+    fn runs_as_the_session_user() {
+        let mut t = test_env(&[]);
+        t.sandbox(
+            "box",
+            "running",
+            &[
+                ("sbx.agent", "shell"),
+                ("sbx.workspace", "/w/r"),
+                ("sbx.clone", "true"),
+                ("sbx.user", "somebody:1001"),
+            ],
+        );
+        t.runner().interactive_exit(0);
+        t.sbt(&["_upload-pack", "box"]).unwrap();
+        let call = &t.runner().interactive_calls()[0];
+        assert!(call.windows(2).any(|w| w == ["-u", "somebody"]), "{call:?}");
     }
 
     #[test]

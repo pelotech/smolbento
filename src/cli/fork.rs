@@ -47,9 +47,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     }
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     if was_stopped {
-        for w in provision::egress_warnings(ctx, parent.name()) {
-            crate::warning!("{w}");
-        }
+        provision::print_egress_warnings(ctx, parent.name());
     }
     for n in &names {
         fork_one(ctx, &parent, n, &start)

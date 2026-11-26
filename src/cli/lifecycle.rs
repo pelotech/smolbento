@@ -121,7 +121,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             continue;
         }
         let start_plan = provision::start_plan(ctx, &sb.meta)?;
-        provision::restart_egress(ctx, &sb);
+        provision::before_start(ctx, &sb);
         let mut step = p.step(n, "starting");
         let started = sandbox::start(&ctx.vm, &sb, &start_plan, &mut |e| {
             if let Event::Pull(pull) = e {
@@ -135,6 +135,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
                 return Err(e);
             }
         }
+        provision::print_egress_warnings(ctx, n);
     }
     Ok(0)
 }
@@ -356,9 +357,10 @@ fn cutoff(filters: &[String], now: i64) -> Result<Option<i64>> {
         let t = match humantime::parse_rfc3339_weak(v) {
             Ok(t) => t.duration_since(UNIX_EPOCH)?.as_secs() as i64,
             Err(_) => {
-                now - humantime::parse_duration(v)
-                    .with_context(|| format!("invalid until value '{v}'"))?
-                    .as_secs() as i64
+                let d = humantime::parse_duration(v)
+                    .with_context(|| format!("invalid until value '{v}'"))?;
+                // Saturating: a huge duration means "older than ever", not a future cutoff.
+                now.saturating_sub(i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
             }
         };
         cutoff = Some(t);

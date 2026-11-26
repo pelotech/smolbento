@@ -313,7 +313,12 @@ fn parse_cidr(s: &str) -> Result<Option<(IpAddr, u8)>> {
     Ok(Some((addr, prefix)))
 }
 
+/// An IPv4 network also matches the IPv4-mapped IPv6 form of its addresses, as in smolvm.
 fn in_cidr(ip: IpAddr, net: IpAddr, prefix: u8) -> bool {
+    let ip = match (ip, net) {
+        (IpAddr::V6(a), IpAddr::V4(_)) => a.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        _ => ip,
+    };
     match (ip, net) {
         (IpAddr::V4(a), IpAddr::V4(b)) => {
             let mask = if prefix == 0 {

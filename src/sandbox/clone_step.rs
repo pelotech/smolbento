@@ -26,13 +26,15 @@ impl CloneStep {
 }
 
 /// As root: the volume is root-owned and may hold `lost+found`, which `git clone` won't clone into.
-pub(super) fn clone_prep_cmd(step: &CloneStep) -> String {
+/// The clone goes to `user`, the session user.
+pub(super) fn clone_prep_cmd(step: &CloneStep, user: &str) -> String {
     let (d, git) = step.quoted();
     let lf = sh_quote(&format!("{}/lost+found", step.dir));
-    format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
+    let user = sh_quote(user);
+    format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown {user} {d}")
 }
 
-/// As `agent`: trusting the source for git, then sbx's clone command (skipped once cloned), then
+/// As the session user: trusting the source for git, then sbx's clone command (skipped once cloned), then
 /// its remote copy, which runs on
 /// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
 /// A detached worktree's commit is checked out after the clone (a local clone copies every object,
@@ -82,9 +84,14 @@ pub(super) fn run_clone<R: Runner>(
     step: &CloneStep,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
-    for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
+    // The user part of a workload's `user:group`, as for its hooks.
+    let (user, _) = super::labels::split_user(sb.meta.rec.session_user());
+    for (who, cmd) in [
+        ("root", clone_prep_cmd(step, user)),
+        (user, clone_cmd(step)),
+    ] {
         let out = vm
-            .exec_captured(&ExecSpec::sh(&sb.machine, user, cmd))
+            .exec_captured(&ExecSpec::sh(&sb.machine, who, cmd))
             .map_err(|e| {
                 // git's first error line, not the whole stderr.
                 let text = SmolvmError::message_of(&e);

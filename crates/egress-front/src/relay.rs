@@ -132,7 +132,8 @@ fn relay_with_timeout(
 /// Read what the guest sends first: wait up to `wait` for its first bytes (and while they may still
 /// grow into an HTTP request line), then read until a whole ClientHello (or bytes that aren't one) or
 /// the end of HTTP headers is in, nothing more arrives for `FIRST_BYTES_IDLE`, the guest closes, or
-/// `MAX_CLIENT_HELLO` bytes. Empty when nothing came.
+/// `MAX_CLIENT_HELLO` bytes. Empty when nothing came, or when an HTTP request line is still
+/// unfinished then: with no name to decide by, the flow is closed.
 fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Vec<u8>> {
     let deadline = Instant::now() + wait;
     guest.set_read_timeout(Some(wait))?;
@@ -151,8 +152,7 @@ fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Ve
         // may hold `\n\n`: plain HTTP waits for its headers' end, after any empty lines a server
         // skips before the request line.
         let tls = first[0] == 0x16;
-        let start = first.iter().position(|b| !matches!(b, b'\r' | b'\n'));
-        let head = start.map_or(&[][..], |s| &first[s..]);
+        let head = head(&first);
         let done = (tls && peek_client_hello(&first) != Peek::Incomplete)
             || head.windows(4).any(|w| w == b"\r\n\r\n")
             || (!tls && head.windows(2).any(|w| w == b"\n\n"));
@@ -172,7 +172,17 @@ fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Ve
         };
         guest.set_read_timeout(Some(idle))?;
     }
+    // A request line that never finished has no name to decide it by: nothing goes on.
+    if request_line_pending(head(&first)) {
+        first.clear();
+    }
     Ok(first)
+}
+
+/// `first` after any empty lines, which a server skips before an HTTP request line.
+fn head(first: &[u8]) -> &[u8] {
+    let start = first.iter().position(|b| !matches!(b, b'\r' | b'\n'));
+    start.map_or(&[][..], |s| &first[s..])
 }
 
 /// Whether `head` may still grow into an HTTP/1 request line: a prefix of a method, or a method, a
@@ -193,7 +203,6 @@ mod tests {
     use super::*;
     use crate::name::client_hello;
     use std::net::TcpListener;
-    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
     fn allow() -> Decide {
@@ -509,11 +518,12 @@ mod tests {
             let (mut s, _) = inner_l.accept().unwrap();
             inner.read_preamble(&mut s).unwrap();
             s.write_all(&[VERDICT_CONNECTED]).unwrap();
-            let _ = s.read_to_end(&mut Vec::new());
+            let mut got = Vec::new();
+            let _ = s.read_to_end(&mut got);
+            got
         });
-        let calls = std::sync::atomic::AtomicUsize::new(0);
-        // Allow the destination decide, refuse the one on the first bytes.
-        let (decide, _) = recording(move |_| calls.fetch_add(1, Ordering::SeqCst) > 0);
+        // Everything allowed: an unfinished request line must still not be decided or sent on.
+        let (decide, seen) = recording(|_| false);
         let (mut client, server_side) = pair();
         client.set_nodelay(true).unwrap();
         let handshake = Duration::from_millis(400);
@@ -534,11 +544,21 @@ mod tests {
                 break;
             }
         }
-        let (res, took) = r.join().unwrap();
         drop(client);
-        fake.join().unwrap();
+        let (res, took) = r.join().unwrap();
+        let forwarded = fake.join().unwrap();
         assert!(res.is_ok());
         assert!(took < Duration::from_secs(1), "{took:?}");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "only the destination is decided"
+        );
+        assert!(
+            forwarded.is_empty(),
+            "{:?}",
+            String::from_utf8_lossy(&forwarded)
+        );
     }
 
     #[test]

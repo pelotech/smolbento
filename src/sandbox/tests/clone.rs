@@ -46,8 +46,8 @@ fn clone_commands_quote_and_copy_remotes() {
         remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
     };
     assert_eq!(
-        clone_prep_cmd(&step),
-        "[ -d '/w/my repo/.git' ] && exit 0; rmdir '/w/my repo/lost+found' 2>/dev/null; chown agent '/w/my repo'"
+        clone_prep_cmd(&step, "agent"),
+        "[ -d '/w/my repo/.git' ] && exit 0; rmdir '/w/my repo/lost+found' 2>/dev/null; chown 'agent' '/w/my repo'"
     );
     assert_eq!(
         clone_cmd(&step),
@@ -121,7 +121,7 @@ fn start_runs_the_clone_step_after_setup() {
     );
     let last2 = &lines[lines.len() - 3..lines.len() - 1];
     assert!(
-        last2[0].contains("-u root") && last2[0].contains("chown agent"),
+        last2[0].contains("-u root") && last2[0].contains("chown 'agent'"),
         "{last2:?}"
     );
     assert!(
@@ -154,7 +154,7 @@ fn a_failed_clone_stops_the_machine_and_reports_gits_first_line() {
 
 #[test]
 fn a_failed_clone_prep_reports_the_first_line_and_stops() {
-    let prep = clone_prep_cmd(&step("/w/r"));
+    let prep = clone_prep_cmd(&step("/w/r"), "agent");
     let fake = FakeRunner::new();
     fake.spawn_fail(
         &root_sh("sbx-r", &prep),
@@ -384,4 +384,29 @@ fn startup_stderr_without_a_smolvm_error_gets_sbxs_text() {
     let (sb, _) = clone_sandbox();
     let err = run_startup(&vm, &sb, None).unwrap_err();
     assert_eq!(format!("{err:#}"), "kit startup exited with code 2");
+}
+
+#[test]
+fn a_workload_image_user_owns_and_runs_the_clone() {
+    // A v3 workload's image user, as `user:group`, may have no `agent` account at all.
+    let fake = FakeRunner::new();
+    fake.ok(&["machine"], "");
+    let vm = Smolvm::new(fake);
+    let (mut sb, plan) = clone_sandbox();
+    sb.meta.rec.user = Some("somebody:1001".into());
+    run_clone(&vm, &sb, plan.clone.as_ref().unwrap()).unwrap();
+    let lines = vm.runner().call_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("-u root") && l.contains("chown 'somebody' '/w/r'")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("-u somebody") && l.contains("git clone")),
+        "{lines:#?}"
+    );
+    assert!(!lines.iter().any(|l| l.contains("agent")), "{lines:#?}");
 }

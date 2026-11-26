@@ -139,9 +139,7 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     }
     before_start(ctx, sb);
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
-    for w in egress_warnings(ctx, sb.name()) {
-        crate::warning!("{w}");
-    }
+    print_egress_warnings(ctx, sb.name());
     Ok(())
 }
 
@@ -152,9 +150,16 @@ pub(crate) fn before_start<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     restart_egress(ctx, sb);
 }
 
+/// Prints `egress_warnings`, as every start does after the sandbox is up.
+pub(crate) fn print_egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) {
+    for w in egress_warnings(ctx, sandbox) {
+        crate::warning!("{w}");
+    }
+}
+
 /// What the egress process of `sandbox` reported it couldn't resolve, as warnings. Read without
 /// waiting: nothing when it hasn't started or got that far yet.
-pub(crate) fn egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) -> Vec<String> {
+fn egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) -> Vec<String> {
     let file = crate::egress::unresolved_file(&ctx.paths, sandbox);
     let text = std::fs::read_to_string(file).unwrap_or_default();
     text.lines()
@@ -930,9 +935,7 @@ pub fn create_with<R: Runner>(
         }
     }
     if result.is_ok() {
-        for w in egress_warnings(ctx, &req.name) {
-            crate::warning!("{w}");
-        }
+        print_egress_warnings(ctx, &req.name);
     }
     result
 }
