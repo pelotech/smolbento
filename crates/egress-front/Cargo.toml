@@ -8,8 +8,9 @@ authors = ["Pelotech"]
 publish = false
 
 # Stopgap until smolvm's request-filter hook is released and smolvm-credentials is on crates.io: a tag on the fork
-# that is a smolvm base plus the hook (and an https .gitmodules). `just smolvm-fork [BASE]` makes it and updates
-# these lines; BASE defaults to the release in smolvm.lock, which the current tag is based on.
+# that is a smolvm base plus the hook (and an https .gitmodules). `just smolvm-fork BASE` makes it and updates
+# these lines. The base needn't match smolvm.lock: the interceptor's wire format is versioned, so a new tag is
+# needed only for smolvm-credentials or smolvm-protocol changes egress-front uses.
 [dependencies]
 anyhow = "1.0.104"
 # The header type of smolvm-credentials' `RequestInfo` (hyper re-exports it), so a filter passes its headers straight through.
@@ -17,8 +18,8 @@ http = "1.5.0"
 # Mints the broad CA as smolvm-credentials mints its own: same version and features.
 rcgen = { version = "0.14.0", default-features = false, features = ["ring", "pem"] }
 serde_json = "1.0.154"
-smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook0d03d418", version = "1.37.0" }
-smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook0d03d418", version = "1.37.0" }
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook67b86da2", version = "1.37.0" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-v1.37.0-hook67b86da2", version = "1.37.0" }
 zeroize = "1.9.2"
 
 [dev-dependencies]

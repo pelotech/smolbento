@@ -1698,7 +1698,8 @@ fn create_records_the_ports_it_picked() {
         .next()
         .unwrap()
         .to_string();
-    assert!(auto.ends_with(":80") && !auto.contains("81"), "{auto}");
+    // Only the picked one: the explicit 8080:81 isn't recorded.
+    assert!(auto.ends_with(":80") && !auto.contains(','), "{auto}");
 }
 
 #[test]
