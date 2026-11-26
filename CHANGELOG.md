@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.41.2](https://github.com/pelotech/smolbento/compare/v0.41.1...v0.41.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* hosted egress, kit digest, volume mode, bridge, flow cap and fork egress ([#272](https://github.com/pelotech/smolbento/issues/272)) ([5d7e917](https://github.com/pelotech/smolbento/commit/5d7e9171ecab93bc9dd85f4689707f477dde3485))
+
+
+### Refactors
+
+* **kits:** ask the registry for a cached kit's tag once a day ([#270](https://github.com/pelotech/smolbento/issues/270)) ([da277b0](https://github.com/pelotech/smolbento/commit/da277b0c449c2484bedcc04455a4747b14b57703))
+* **test:** skip fsync in unit tests ([#273](https://github.com/pelotech/smolbento/issues/273)) ([86d5607](https://github.com/pelotech/smolbento/commit/86d5607dd2bcd8cd3e24514e7a287cdf988904ae))
+
+
+### Tests
+
+* **e2e:** cache image pulls, skip needless apk installs, poll faster ([#274](https://github.com/pelotech/smolbento/issues/274)) ([c25c315](https://github.com/pelotech/smolbento/commit/c25c315c1118f8adfca4a5d95f587d00b28a3d02))
+* **e2e:** share the agent kit cache, use the published nix kit on CI ([#275](https://github.com/pelotech/smolbento/issues/275)) ([ebcd9d1](https://github.com/pelotech/smolbento/commit/ebcd9d1683b8b6aee90dffb1bf090baec7fb96c1))
+
 ## [0.41.1](https://github.com/pelotech/smolbento/compare/v0.41.0...v0.41.1) (2026-11-25)
 
 
