@@ -148,14 +148,15 @@ fn read_first_bytes(guest: &mut TcpStream, wait: Duration) -> std::io::Result<Ve
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         }
-        // Only TLS-looking bytes end on the ClientHello check, and a ClientHello's random bytes
-        // may hold `\n\n`: plain HTTP waits for its headers' end, after any empty lines a server
-        // skips before the request line.
-        let tls = first[0] == 0x16;
+        // TLS-looking bytes end only on the ClientHello check, as its random bytes may hold a blank
+        // line: plain HTTP waits for its headers' end, after any empty lines a server skips before
+        // the request line.
         let head = head(&first);
-        let done = (tls && peek_client_hello(&first) != Peek::Incomplete)
-            || head.windows(4).any(|w| w == b"\r\n\r\n")
-            || (!tls && head.windows(2).any(|w| w == b"\n\n"));
+        let done = if first[0] == 0x16 {
+            peek_client_hello(&first) != Peek::Incomplete
+        } else {
+            head.windows(4).any(|w| w == b"\r\n\r\n") || head.windows(2).any(|w| w == b"\n\n")
+        };
         if done {
             break;
         }
@@ -501,13 +502,20 @@ mod tests {
     }
 
     #[test]
-    fn a_client_hello_with_lf_lf_split_over_two_writes_is_read_whole() {
-        let mut hello = client_hello(Some("api.example.com"));
-        // The ClientHello's random field: `\n\n` there must not end a TLS read early.
-        hello[11..13].copy_from_slice(b"\n\n");
-        let parts: [&[u8]; 2] = [&hello[..13], &hello[13..]];
-        let seen = guest_sends(443, &parts, Duration::from_millis(15), b"ok");
-        assert_eq!(seen[1].name.as_deref(), Some("api.example.com"));
+    fn a_client_hello_with_a_blank_line_split_over_two_writes_is_read_whole() {
+        // The ClientHello's random field: a blank line there must not end a TLS read early.
+        for blank in [&b"\n\n"[..], b"\r\n\r\n"] {
+            let mut hello = client_hello(Some("api.example.com"));
+            let end = 11 + blank.len();
+            hello[11..end].copy_from_slice(blank);
+            let parts: [&[u8]; 2] = [&hello[..end], &hello[end..]];
+            let seen = guest_sends(443, &parts, Duration::from_millis(15), b"ok");
+            assert_eq!(
+                seen[1].name.as_deref(),
+                Some("api.example.com"),
+                "{blank:?}"
+            );
+        }
     }
 
     #[test]
