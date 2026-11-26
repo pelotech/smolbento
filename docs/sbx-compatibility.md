@@ -327,7 +327,7 @@ failing checks, with the reasons, are in [tests/conformance](../tests/conformanc
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
-`a4d6ca06175f2d9cac57428b8c254ba7f5f36570` (`SPEC_COMMIT` in the code; `just conformance` runs the
+`7c8b7cd53acc7271184b5c66ab0acb9613df56c7` (`SPEC_COMMIT` in the code; `just conformance` runs the
 spec's suite at the same commit). v3 is still experimental upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
 The spec is followed with hosted egress, the default. A sandbox on smolvm egress
@@ -384,6 +384,7 @@ for an optional entry.
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |
 | `kvm@1`, `auto-restart@1`, `open-url@1`, `docker-auth@1` | Not measured | No |
+| `clipboard@1` | Not measured | No, but its config is checked as the spec reads it. smolbento can't read the host clipboard or carry images, and its text copy stays behind `clipboard.textCopy` for every sandbox, as in sbx, where the spec ties both directions to the kit's grant ([Browser and clipboard](usage.md#browser-and-clipboard)) |
 
 ### What works as in sbx
 
