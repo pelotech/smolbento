@@ -222,6 +222,31 @@ impl Policy {
         crate::config::save_toml(&paths.policy_file(), self)
     }
 
+    /// Saves the rules `ids` of `sandbox` from this copy into the policy file, under its lock,
+    /// keeping what other commands changed since this copy was loaded; returns the policy saved.
+    /// For a create or kit add, which hold their copy too long to hold the lock.
+    pub fn save_rules(&self, paths: &Paths, sandbox: &str, ids: &[String]) -> Result<Policy> {
+        Policy::update(paths, |fresh| {
+            let rules = self
+                .sandboxes
+                .get(sandbox)
+                .into_iter()
+                .flat_map(|s| &s.rules);
+            for rule in rules.filter(|r| ids.contains(&r.id)) {
+                if fresh.find(&rule.id).is_none() {
+                    let entry = fresh.sandboxes.entry(sandbox.to_string()).or_default();
+                    entry.rules.push(rule.clone());
+                }
+            }
+            Ok(fresh.clone())
+        })
+    }
+
+    /// Loads, changes and saves the policy under its lock (`config::update_toml`).
+    pub fn update<T>(paths: &Paths, f: impl FnOnce(&mut Policy) -> Result<T>) -> Result<T> {
+        crate::config::update_toml(&paths.policy_file(), f)
+    }
+
     /// The mode sandboxes run under. Before any mode was chosen, sandboxes stay open as they
     /// were before policies existed.
     pub fn current_mode(&self) -> Mode {
@@ -563,6 +588,44 @@ mod tests {
         p.copy_sandbox("a", "b");
         assert_eq!(p.sandboxes["b"].rules.len(), 1, "replaced, not merged");
         assert_eq!(p.sandboxes["b"].rules[0].resources, ["new.com"]);
+    }
+
+    /// A create changes the policy in memory and saves late: what another command saved meanwhile
+    /// stays.
+    #[test]
+    fn save_rules_keeps_what_was_saved_meanwhile() {
+        let (_d, paths) = crate::config::test_paths();
+        let mut mine = Policy::load(&paths).unwrap();
+        let id = mine.deny(Some("new"), "a.com");
+        let mut theirs = Policy::load(&paths).unwrap();
+        let other = theirs.allow(None, "b.com");
+        theirs.save(&paths).unwrap();
+        let saved = mine
+            .save_rules(&paths, "new", std::slice::from_ref(&id))
+            .unwrap();
+        assert_eq!(saved, Policy::load(&paths).unwrap());
+        assert!(saved.find(&id).is_some() && saved.find(&other).is_some());
+    }
+
+    /// Only the rules this command added go in: one another command removed meanwhile stays gone.
+    #[test]
+    fn save_rules_does_not_bring_back_a_removed_rule() {
+        let (_d, paths) = crate::config::test_paths();
+        let mut p = Policy::load(&paths).unwrap();
+        let old = p.deny(Some("s"), "old.com");
+        p.save(&paths).unwrap();
+        let mut mine = Policy::load(&paths).unwrap();
+        let new = mine.deny(Some("s"), "new.com");
+        Policy::update(&paths, |p| {
+            p.remove_rules(Some("s"), Some(&old), None, None, None, None);
+            Ok(())
+        })
+        .unwrap();
+        let saved = mine
+            .save_rules(&paths, "s", std::slice::from_ref(&new))
+            .unwrap();
+        assert!(saved.find(&new).is_some());
+        assert!(saved.find(&old).is_none(), "resurrected");
     }
 
     #[test]

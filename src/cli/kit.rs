@@ -655,8 +655,9 @@ fn add_running<R: Runner>(
         // Install rules an interrupted add left are pushed too: `added` doesn't list them.
         if !added.is_empty() || !steps.install_rules.is_empty() {
             let open = || -> Result<()> {
-                policy.save(&ctx.paths)?;
-                push(&policy).context("applying the kit's network rules")
+                let ids: Vec<String> = added.iter().chain(&steps.install_rules).cloned().collect();
+                let saved = policy.save_rules(&ctx.paths, name, &ids)?;
+                push(&saved).context("applying the kit's network rules")
             };
             open().map_err(|e| (None, e))?;
         }
@@ -668,9 +669,10 @@ fn add_running<R: Runner>(
                 if steps.install_rules.is_empty() {
                     return Ok(());
                 }
-                let mut policy = Policy::load(&ctx.paths)?;
-                policy.remove_rules_by_ids(name, &steps.install_rules);
-                policy.save(&ctx.paths)?;
+                let policy = Policy::update(&ctx.paths, |p| {
+                    p.remove_rules_by_ids(name, &steps.install_rules);
+                    Ok(p.clone())
+                })?;
                 push(&policy).context("removing the install-phase network rules")
             },
             &mut |_| {},
@@ -696,9 +698,10 @@ fn add_running<R: Runner>(
         };
         if !added.is_empty() {
             let rollback = || -> Result<()> {
-                let mut policy = Policy::load(&ctx.paths)?;
-                policy.remove_rules_by_ids(name, &added);
-                policy.save(&ctx.paths)?;
+                let policy = Policy::update(&ctx.paths, |p| {
+                    p.remove_rules_by_ids(name, &added);
+                    Ok(p.clone())
+                })?;
                 push(&policy)
             };
             if let Err(r) = rollback() {

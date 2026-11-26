@@ -97,9 +97,10 @@ fn fork_one<R: Runner>(
     // The name is free, so anything stored under it is stale (say, a machine deleted with raw
     // smolvm): drop its secrets, keychain values included, and policy entry.
     super::secret::forget_sandbox(ctx, fork, true)?;
-    let mut policy = Policy::load(&ctx.paths)?;
-    policy.copy_sandbox(parent.name(), fork);
-    policy.save(&ctx.paths)?;
+    Policy::update(&ctx.paths, |p| {
+        p.copy_sandbox(parent.name(), fork);
+        Ok(())
+    })?;
     let result = add_remote_and_branch(ctx, parent, fork, start);
     if result.is_err()
         && let Err(e) = super::secret::forget_sandbox(ctx, fork, false)

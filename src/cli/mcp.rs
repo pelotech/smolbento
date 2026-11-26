@@ -16,11 +16,10 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
         McpCmd::Ls(a) => ls(ctx, &a)?,
         McpCmd::Inspect(a) => inspect(ctx, &a)?,
         McpCmd::Rm { name, force: _ } => {
-            let mut file = McpFile::load(&ctx.paths)?;
-            if file.servers.remove(&name).is_none() {
-                bail!(crate::mcp::unknown(&name));
-            }
-            file.save(&ctx.paths)?;
+            McpFile::update(&ctx.paths, |file| match file.servers.remove(&name) {
+                Some(_) => Ok(()),
+                None => bail!(crate::mcp::unknown(&name)),
+            })?;
             writeln!(&ctx.out, "Removed MCP server {name}")?;
         }
         McpCmd::Auth(_) => return Err(no_gateway("mcp auth")),

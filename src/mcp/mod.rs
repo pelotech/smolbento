@@ -59,8 +59,7 @@ fn connect(url: &str) -> Result<()> {
 /// registered differently.
 pub fn register(paths: &crate::config::Paths, name: &str, server: Server) -> Result<()> {
     check_server(name, &server)?;
-    let mut file = McpFile::load(paths)?;
-    match file.servers.get(name) {
+    McpFile::update(paths, |file| match file.servers.get(name) {
         Some(existing) if *existing == server => Ok(()),
         Some(_) => {
             bail!(
@@ -69,9 +68,9 @@ pub fn register(paths: &crate::config::Paths, name: &str, server: Server) -> Res
         }
         None => {
             file.servers.insert(name.to_string(), server);
-            file.save(paths)
+            Ok(())
         }
-    }
+    })
 }
 
 /// A server's name: what `--static-mcp` and the agent's config call it.
