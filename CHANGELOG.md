@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.41.1](https://github.com/pelotech/smolbento/compare/v0.41.0...v0.41.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **config:** take a relative SMOLBENTO_*_DIR from the current directory ([#266](https://github.com/pelotech/smolbento/issues/266)) ([6bc5d15](https://github.com/pelotech/smolbento/commit/6bc5d1595bd40d84a28cba8ef0da48d5d61e5199))
+
+
+### Chores
+
+* **smolvm:** run smolvm 1.37.6 ([#268](https://github.com/pelotech/smolbento/issues/268)) ([db9b583](https://github.com/pelotech/smolbento/commit/db9b583246204b5154864bd8ba1997ef2dc9224d))
+
+
+### Docs
+
+* catch up with recent changes and say each fact once ([#269](https://github.com/pelotech/smolbento/issues/269)) ([c1c31f4](https://github.com/pelotech/smolbento/commit/c1c31f42e854ec563693d3ead6e52d25deb03881))
+
 ## [0.41.0](https://github.com/pelotech/smolbento/compare/v0.40.0...v0.41.0) (2026-11-25)
 
 
