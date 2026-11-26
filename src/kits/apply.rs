@@ -614,17 +614,9 @@ fn bind_credential(
         }
     }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
-        if kc.optional {
-            crate::kit_warning!(
-                "kit {}: no {} secret is set; skipping its optional credential",
-                kc.kit,
-                c.service
-            );
-            return Ok(());
-        }
+        // A required one fails, as the kit spec says (sbx warns and the requests go out without it).
         let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
-        eprintln!("{}", unbound_required(&kc.kit, &c.service, host));
-        return Ok(());
+        return optional_or_bail(kc, missing_secret(&kc.kit, &c.service, host), "");
     }
     let env = kit_env(c);
     if !guest::is_env_name(&env) {
@@ -736,30 +728,20 @@ fn bind_credential(
     Ok(())
 }
 
-/// sbx's warning for a required credential whose secret isn't set (R39: the create goes on and
-/// the kit's requests go out without it), then the command that sets it.
-fn unbound_required(kit: &str, service: &str, host: &str) -> String {
-    format!(
-        "WARN: required credential not found for service {service}\n{}",
-        missing_secret(kit, service, host)
-    )
-}
-
 /// What a kit credential whose secret isn't set needs, with the command that sets it. A custom
 /// service is named after `set-custom`'s `--env` (lowercased, `_` as `-`), so the hint names the
 /// variable that gives `service`, or says no variable does.
 fn missing_secret(kit: &str, service: &str, host: &str) -> String {
     if services::builtin(service).is_some() {
         return format!(
-            "kit {kit} needs the {service} secret; set it with bento secret set {service} \
-             and recreate the sandbox"
+            "kit {kit} needs the {service} secret; set it with bento secret set {service}"
         );
     }
     let env = upper_env(service);
     if guest::is_env_name(&env) && env.to_ascii_lowercase().replace('_', "-") == service {
         format!(
             "kit {kit} needs the {service} secret; set it with \
-             bento secret set-custom --env {env} --host {host} and recreate the sandbox"
+             bento secret set-custom --env {env} --host {host}"
         )
     } else {
         format!(

@@ -120,9 +120,8 @@ What a kit does, and when:
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
   variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment,
   but no install step, v2 or v3, sees a credential that is only for runtime (every v2 credential).
-- A missing credential doesn't block create. You get `WARN: required credential not found for
-  service SERVICE` and the `bento secret set` command. Requests go out without it until you set it and
-  recreate the sandbox. A built-in service's secret goes only to its own hosts
+- A required credential with no secret set stops create (or `kit add`), naming the `bento secret
+  set` command to run first; sbx warns and goes on. An optional one is skipped, and the kit runs without it. A built-in service's secret goes only to its own hosts
   ([Security](SECURITY.md#kits)). A credential needed only for install is available during install;
   the sandbox then restarts once without it: its variable is gone, and requests to its hosts go out
   without it.
