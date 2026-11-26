@@ -11,7 +11,7 @@ use oci_client::secrets::RegistryAuth;
 use reqwest::header::HeaderValue;
 use serde_json::{Value, json};
 
-use crate::kits::registry_auth::Logins;
+use crate::kits::registry::auth::Logins;
 use crate::util::sha256_digest;
 
 use super::{parse_ref, with_client};

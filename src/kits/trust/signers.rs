@@ -7,10 +7,10 @@ use std::path::Path;
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 
+use super::signing::{self, Match, Policy};
 use crate::config::Settings;
 use crate::kits::registry;
-use crate::kits::registry_auth::Logins;
-use crate::kits::signing::{self, Match, Policy};
+use crate::kits::registry::auth::Logins;
 
 /// sbx's refusal, with DETAIL saying what was wrong.
 fn refused(reference: &str, detail: &str) -> anyhow::Error {

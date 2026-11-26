@@ -554,7 +554,7 @@ impl Image {
             let pulled = smolbento::kits::registry::pull_image(
                 reference,
                 &tmp,
-                smolbento::kits::registry_auth::Logins::none(),
+                smolbento::kits::registry::auth::Logins::none(),
             )
             .unwrap();
             if std::fs::rename(&pulled, &dir).is_err() {

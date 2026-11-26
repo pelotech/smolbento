@@ -1,5 +1,8 @@
 //! Which kit sources may be loaded: registries by pattern, and local directories.
 
+pub mod signers;
+pub mod signing;
+
 use anyhow::{Result, anyhow, bail};
 
 use crate::config::Settings;
@@ -154,9 +157,9 @@ mod tests {
         );
         check(&registry("ghcr.io/pelotech/smolbento/kits/nix:latest"), &s).unwrap();
         assert!(check(&registry("ghcr.io/someone/x:1"), &s).is_err());
-        use crate::kits::signing::{Match, Policy};
+        use super::signing::{Match, Policy};
         let signers =
-            crate::kits::signers::parse(&s.value("kit.trustedSigners").unwrap(), false).unwrap();
+            super::signers::parse(&s.value("kit.trustedSigners").unwrap(), false).unwrap();
         let keyless = |identity: Match, issuer: &str| Policy::Keyless {
             identity,
             issuer: Match::Exact(issuer.into()),

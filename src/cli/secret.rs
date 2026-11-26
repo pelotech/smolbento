@@ -911,7 +911,7 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
     if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
         bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
     }
-    // The login is only ever sent over https, or plain http to localhost (see `kits::registry_auth::trusted_realm`).
+    // The login is only ever sent over https, or plain http to localhost (see `kits::registry::auth::trusted_realm`).
     if let Some(e) = &auth_endpoint
         && !e.starts_with("https://")
     {
