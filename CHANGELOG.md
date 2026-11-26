@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.41.3](https://github.com/pelotech/smolbento/compare/v0.41.2...v0.41.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* concurrent commands no longer drop each other's changes ([#280](https://github.com/pelotech/smolbento/issues/280)) ([b02fdc6](https://github.com/pelotech/smolbento/commit/b02fdc6870416a9a942b9680584d3045b6193edf))
+* **config:** concurrent settings changes no longer drop each other ([#286](https://github.com/pelotech/smolbento/issues/286)) ([49a761c](https://github.com/pelotech/smolbento/commit/49a761c0dab162b249bec9a344945ab020f85f87))
+* **egress:** a ClientHello holding a blank line is read whole; correct the cap docs ([#287](https://github.com/pelotech/smolbento/issues/287)) ([5617b57](https://github.com/pelotech/smolbento/commit/5617b571753aca21f412c79fe1b698344cb5b371))
+* **ports:** pick a new host port at each start for ports published without one ([#285](https://github.com/pelotech/smolbento/issues/285)) ([a34a4da](https://github.com/pelotech/smolbento/commit/a34a4dafe11a66c3d7bba3b5cefeff9336b332c6))
+* request-line trickle, start warnings, clone user, prune overflow, mapped IPv6 ([#279](https://github.com/pelotech/smolbento/issues/279)) ([fbbbd0b](https://github.com/pelotech/smolbento/commit/fbbbd0bf253d8a96fb11e367534aa8dd63c9565d))
+
+
+### Refactors
+
+* **egress:** one policy read per flow, one decision type, fewer layers ([#288](https://github.com/pelotech/smolbento/issues/288)) ([da87fb8](https://github.com/pelotech/smolbento/commit/da87fb801b5ab27094ff2661133513790ca65fe1))
+* fewer smolvm calls when listing, no secret read for hosted binds ([#281](https://github.com/pelotech/smolbento/issues/281)) ([171829d](https://github.com/pelotech/smolbento/commit/171829d4224de1987c994cebb2ab77666449ebe9))
+* group the kit, env and policy command files; extract provision/services ([#284](https://github.com/pelotech/smolbento/issues/284)) ([174fc46](https://github.com/pelotech/smolbento/commit/174fc46d1f1d9501c0066e4a684b3dd446cc3b87))
+* reuse the shared helpers for labels, quoting, times and file writes ([#282](https://github.com/pelotech/smolbento/issues/282)) ([e275115](https://github.com/pelotech/smolbento/commit/e2751158218a3c447fa4007e0659392b7bcafbbf))
+* split host_service, move bridge tests out, group kits modules ([#283](https://github.com/pelotech/smolbento/issues/283)) ([ab6455a](https://github.com/pelotech/smolbento/commit/ab6455a382f5197fcc184543a5b18bba8c3f4325))
+
+
+### Tests
+
+* **e2e:** run eight at a time locally ([#277](https://github.com/pelotech/smolbento/issues/277)) ([31a9d05](https://github.com/pelotech/smolbento/commit/31a9d05bd4543245d54fecbd1a154f5bce372194))
+
 ## [0.41.2](https://github.com/pelotech/smolbento/compare/v0.41.1...v0.41.2) (2026-11-26)
 
 
