@@ -172,18 +172,7 @@ pub fn cached(
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
 pub fn pull_image(reference: &str, cache: &Path, logins: Logins) -> Result<PathBuf> {
-    pull_layout(reference, cache, false, logins)
-}
-
-/// Downloads REF into an OCI layout under the cache and returns its directory. With
-/// `require_kit` the kit annotation is checked before any layer is fetched.
-fn pull_layout(
-    reference: &str,
-    cache: &Path,
-    require_kit: bool,
-    logins: Logins,
-) -> Result<PathBuf> {
-    let fetched = fetch_ref(reference, cache, require_kit, true, logins)?;
+    let fetched = fetch_ref(reference, cache, false, true, logins)?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
 }
 
@@ -813,8 +802,8 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let config = l.config()?;
     kit.command = command_of(&config);
     let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
-    let env = (config["config"]["Env"].as_array().into_iter().flatten())
-        .filter_map(|e| e.as_str()?.split_once('='))
+    let env = (env_of(&config).iter())
+        .filter_map(|e| e.split_once('='))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     kit.config = Some(ImageConfig {
@@ -842,10 +831,12 @@ pub fn image_env(reference: &str, cache: &Path, logins: Logins) -> Result<Vec<St
 
 /// The `Env` of an image config.
 pub(crate) fn env_of(config: &Value) -> Vec<String> {
-    let env = config["config"]["Env"]
-        .as_array()
-        .map_or(&[][..], Vec::as_slice);
-    env.iter()
+    strings(&config["config"]["Env"])
+}
+
+/// The strings in a JSON array; none for anything else.
+fn strings(v: &Value) -> Vec<String> {
+    (v.as_array().into_iter().flatten())
         .filter_map(|v| v.as_str().map(String::from))
         .collect()
 }
@@ -878,18 +869,8 @@ fn cached_manifest(reference: &str, cache: &Path) -> Option<String> {
 
 /// An image config's Entrypoint then Cmd; `None` when both are empty.
 fn command_of(config: &Value) -> Option<Vec<String>> {
-    let words = |k: &str| -> Vec<String> {
-        config["config"][k]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let mut command = words("Entrypoint");
-    command.extend(words("Cmd"));
+    let mut command = strings(&config["config"]["Entrypoint"]);
+    command.extend(strings(&config["config"]["Cmd"]));
     (!command.is_empty()).then_some(command)
 }
 

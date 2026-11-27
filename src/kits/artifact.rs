@@ -25,6 +25,18 @@ pub(crate) const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
 pub(crate) const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 /// Where a kit's `files/home` lands in the guest, and so its prefix in the layer.
 const HOME_IN_LAYER: &str = "home/agent";
+/// The empty blob an OCI artifact without a config points at.
+pub(crate) const EMPTY_BLOB: &[u8] = b"{}";
+
+/// The descriptor of `EMPTY_BLOB`, with the blob inline.
+pub(crate) fn empty_descriptor() -> Value {
+    json!({
+        "mediaType": EMPTY_MEDIA_TYPE,
+        "digest": sha256_digest(EMPTY_BLOB),
+        "size": EMPTY_BLOB.len(),
+        "data": base64::engine::general_purpose::STANDARD.encode(EMPTY_BLOB),
+    })
+}
 
 /// What `kit push` publishes from a kit directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,10 +250,8 @@ pub fn manifest(p: &Payload, created: &str) -> (Vec<u8>, Vec<(String, Vec<u8>)>)
             json!({"mediaType": V2_FILES_MEDIA_TYPE, "digest": digest, "size": f.len()})
         }
         None => {
-            let digest = sha256_digest(b"{}");
-            blobs.push((digest.clone(), b"{}".to_vec()));
-            let data = base64::engine::general_purpose::STANDARD.encode(b"{}");
-            json!({"mediaType": EMPTY_MEDIA_TYPE, "digest": digest, "size": 2, "data": data})
+            blobs.push((sha256_digest(EMPTY_BLOB), EMPTY_BLOB.to_vec()));
+            empty_descriptor()
         }
     };
     let mut annotations = p.annotations.clone();

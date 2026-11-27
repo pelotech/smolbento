@@ -89,11 +89,7 @@ pub(crate) fn normalise(r: &str) -> Result<String> {
         None => (r, None),
     };
     if let Some(d) = digest {
-        let hex = d.strip_prefix("sha256:").ok_or_else(invalid)?;
-        let ok = hex.len() == 64 && hex.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'));
-        if !ok {
-            return Err(invalid());
-        }
+        crate::kits::registry::hex_of(d).map_err(|_| invalid())?;
     }
     let mut parts: Vec<String> = name.split('/').map(str::to_string).collect();
     if let Some(last) = parts.last_mut() {

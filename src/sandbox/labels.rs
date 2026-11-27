@@ -223,6 +223,11 @@ pub fn split_user(spec: &str) -> (&str, Option<&str>) {
         .map_or((spec, None), |(u, g)| (u, Some(g)))
 }
 
+/// Whether a `user[:group]` spec runs as root: `root`, `0`, or no user.
+pub fn is_root_user(spec: &str) -> bool {
+    matches!(split_user(spec).0, "" | "0" | "root")
+}
+
 /// A sandbox's private dockerd, from its `dockerd@1` grant (the `sbx.docker` label).
 /// Ordered Off < Manual < Auto, so merging grants takes the max.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]

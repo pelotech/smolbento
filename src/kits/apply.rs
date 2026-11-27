@@ -426,7 +426,7 @@ pub fn image_workdir(workload: &Kit) -> Option<&str> {
 fn image_user(plan: &Plan) -> Option<&str> {
     (plan.workload.config.as_ref())
         .map(|c| c.user.as_str())
-        .filter(|u| !matches!(u.split(':').next(), Some("" | "0" | "root")))
+        .filter(|u| !crate::sandbox::labels::is_root_user(u))
 }
 
 /// The kits' install hooks as steps, numbered per kit. They run in the workload image's WORKDIR,
@@ -819,21 +819,27 @@ pub fn select_contexts(
             ),
         }
     }
-    let mut dropped: Vec<&str> = Vec::new();
-    for c in all {
-        if !all.iter().any(|o| o.kit == c.kit && o.version == version)
-            && !dropped.contains(&&*c.kit)
-        {
-            dropped.push(&c.kit);
-            crate::kit_warning!(
-                "kit {}: agent-context@{other} skipped (this sandbox's kits use \
-                 agent-context@{version})",
-                c.kit
-            );
-        }
-    }
+    let dropped = (all.iter().map(|c| &*c.kit))
+        .filter(|k| !all.iter().any(|o| o.kit == *k && o.version == version));
+    warn_once(dropped, |kit| {
+        format!(
+            "kit {kit}: agent-context@{other} skipped (this sandbox's kits use \
+             agent-context@{version})"
+        )
+    });
     let kept = all.iter().filter(|c| c.version == version).collect();
     Ok((Some(version), kept))
+}
+
+/// Warns once for each kit in KITS, in order, with WARNING's text for it.
+fn warn_once<'a>(kits: impl Iterator<Item = &'a str>, warning: impl Fn(&str) -> String) {
+    let mut told: Vec<&str> = Vec::new();
+    for kit in kits {
+        if !told.contains(&kit) {
+            told.push(kit);
+            crate::kit_warning!("{}", warning(kit));
+        }
+    }
 }
 
 /// The agent files in the guest, each of which gets every kit's agent context. They are the
@@ -919,16 +925,10 @@ fn context_scripts(
         );
     }
     if agent_files.is_empty() {
-        let mut told: Vec<&str> = Vec::new();
-        for c in contexts.iter().filter(|c| c.kit != workload) {
-            if !told.contains(&&*c.kit) {
-                told.push(&c.kit);
-                crate::kit_warning!(
-                    "kit {}: agent context dropped (no kit declares an agent file)",
-                    c.kit
-                );
-            }
-        }
+        let mixins = contexts.iter().map(|c| &*c.kit).filter(|k| *k != workload);
+        warn_once(mixins, |kit| {
+            format!("kit {kit}: agent context dropped (no kit declares an agent file)")
+        });
         return Ok(Vec::new());
     }
     // No kit asks for a profile (a `kit add` of a kit without agent context): nothing to write.

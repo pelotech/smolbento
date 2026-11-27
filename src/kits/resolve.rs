@@ -433,10 +433,13 @@ fn image_home(config: Option<&ImageConfig>) -> Option<String> {
     if let Some((_, h)) = c.env.iter().rev().find(|(k, _)| k == "HOME") {
         return Some(h.clone());
     }
-    match crate::sandbox::labels::split_user(&c.user).0 {
-        "agent" => Some(super::AGENT_HOME.into()),
-        "" | "0" | "root" => Some("/root".into()),
-        _ => None,
+    use crate::sandbox::labels::{is_root_user, split_user};
+    if is_root_user(&c.user) {
+        Some("/root".into())
+    } else if split_user(&c.user).0 == "agent" {
+        Some(super::AGENT_HOME.into())
+    } else {
+        None
     }
 }
 

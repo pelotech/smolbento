@@ -34,9 +34,14 @@ const BUILTINS: [(&str, &str); 2] = [
     ),
 ];
 
+/// The (name, descriptor) of the shipped kit a bare REF names.
+fn builtin_entry(reference: &str) -> Option<&'static (&'static str, &'static str)> {
+    BUILTINS.iter().find(|(n, _)| *n == reference)
+}
+
 /// Whether `reference` is a bare name for a kit shipped inside smolbento.
 pub fn is_builtin(reference: &str) -> bool {
-    BUILTINS.iter().any(|(n, _)| *n == reference)
+    builtin_entry(reference).is_some()
 }
 
 /// Bare names for kits smolbento publishes, loaded from their registry like any registry kit
@@ -53,21 +58,18 @@ pub fn alias(reference: &str) -> Option<&'static str> {
 
 /// The shipped kit a bare REF names. Only the bare word: `./docker` is a path.
 pub fn builtin(reference: &str) -> Option<Result<Kit>> {
-    let (name, yaml) = BUILTINS.iter().find(|(n, _)| *n == reference)?;
+    let (name, yaml) = builtin_entry(reference)?;
     Some(v3::parse(yaml, Source::Builtin(name)).with_context(|| format!("shipped kit {name}")))
 }
 
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
 /// or pulled. Built-in agent names are `agent`'s business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
-pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
-    load_with(ctx, reference, false)
-}
-
-/// `load`, optionally offline (`kit inspect|validate --offline`): like sbx, the source policy
-/// isn't checked, and only what needs no network loads (a local v2 kit or Smolfile). A registry
-/// reference would be pulled and a v3 source directory built (the builder pulls its base image),
-/// so both are refused.
+///
+/// `offline` (`kit inspect|validate --offline`): like sbx, the source policy isn't checked, and
+/// only what needs no network loads (a local v2 kit or Smolfile). A registry reference would be
+/// pulled and a v3 source directory built (the builder pulls its base image), so both are
+/// refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
     let pull = Pull::offline(offline);
     Ok(fetch(ctx, reference, pull, None, Position::Kit, &mut |_| {})?.0)
@@ -111,22 +113,25 @@ fn with_logins<R: Runner, T>(
     f(Logins::new(&registries, &*ctx.store))
 }
 
-/// Pulls REF (calling `before` first) unless `pull` lets the cache answer; also returns whether
-/// that added no blob to the cache.
+/// Pulls REF with PULL_KIT (calling `before` first) unless `pull` lets the cache answer, and
+/// refuses under `Pull::Never`; also returns whether that added no blob to the cache.
 fn pull_noting(
     reference: &str,
     pin: Option<&str>,
     cache: &Path,
-    logins: Logins,
     pull: Pull,
     before: &mut dyn FnMut(Fetch),
+    pull_kit: impl FnOnce() -> Result<Kit>,
 ) -> Result<(Kit, bool)> {
     if let Some(kit) = registry::cached(reference, pin, cache, pull)? {
         return Ok((kit, true));
     }
+    if pull == Pull::Never {
+        bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
+    }
     before(Fetch::Pull);
     let blobs = entries(&registry::store_dir(cache));
-    let kit = registry::pull(reference, pin, cache, logins)?;
+    let kit = pull_kit()?;
     Ok((kit, entries(&registry::store_dir(cache)) == blobs))
 }
 
@@ -161,14 +166,12 @@ pub fn fetch<R: Runner>(
                     None
                 };
                 let cache = ctx.paths.kit_cache();
-                pull_noting(&r, verified.as_deref(), &cache, logins, pull, before)
+                let pin = verified.as_deref();
+                pull_noting(&r, pin, &cache, pull, before, || {
+                    registry::pull(&r, pin, &cache, logins)
+                })
             })?,
-            Located::V2(dir) => {
-                let spec = dir.join("spec.yaml");
-                let yaml = fs::read_to_string(&spec)
-                    .with_context(|| format!("reading {}", spec.display()))?;
-                (v2::parse(&yaml, &dir)?, true)
-            }
+            Located::V2(dir) => (v2::parse(&read_spec(&dir)?, &dir)?, true),
             Located::V3(_) if offline => bail!(
                 "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
                  needs the network; run without --offline"
@@ -203,15 +206,12 @@ pub fn agent<R: Runner>(
         let kit = registry::read_layout(Path::new(&reference), source.clone())
             .with_context(|| format!("loading agent kit {reference}"))?;
         (kit, true)
-    } else if let Some(kit) = registry::cached(&reference, pin, &cache, pull)? {
-        (kit, true)
     } else {
-        if pull == Pull::Never {
-            bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
-        }
-        with_logins(ctx, sandbox, |logins| {
-            pull_noting(&reference, pin, &cache, logins, pull, before)
-                .with_context(|| format!("pulling agent kit {reference}"))
+        pull_noting(&reference, pin, &cache, pull, before, || {
+            with_logins(ctx, sandbox, |logins| {
+                registry::pull(&reference, pin, &cache, logins)
+                    .with_context(|| format!("pulling agent kit {reference}"))
+            })
         })?
     };
     kit.source = source;
@@ -286,19 +286,11 @@ pub fn pinned<R: Runner>(
         // tag) answers now. A recorded digest stays authoritative.
         let digest = digest.or(verified.as_deref());
         let cache = ctx.paths.kit_cache();
-        match registry::cached(base, digest, &cache, pull)? {
-            Some(kit) => (kit, true),
-            None if offline => {
-                bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it")
-            }
-            None => {
-                before(Fetch::Pull);
-                let kit = with_logins(ctx, sandbox, |logins| {
-                    registry::pull(base, digest, &cache, logins)
-                })?;
-                (kit, false)
-            }
-        }
+        pull_noting(base, digest, &cache, pull, before, || {
+            with_logins(ctx, sandbox, |logins| {
+                registry::pull(base, digest, &cache, logins)
+            })
+        })?
     };
     kit.reference = Some(base.to_string());
     Ok((kit, cached))
@@ -309,25 +301,26 @@ fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())
 }
 
-/// The name `load` gives the kit REF names where the agent goes (the sandbox is named after it),
-/// without pulling or building it: trust is checked, then the name comes from the source (or a
-/// v2 `spec.yaml`'s `name`).
+/// The name `load_with` gives the kit REF names where the agent goes (the sandbox is named after
+/// it), without pulling or building it: trust is checked, then the name comes from the source (or
+/// a v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
     let reference = alias(reference).unwrap_or(reference);
-    if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
+    if let Some((name, _)) = builtin_entry(reference) {
         return v3::name_from_source(&Source::Builtin(name));
     }
     match locate(ctx, reference, false, Position::Agent)? {
         Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
-        Located::V2(dir) => {
-            let spec = dir.join("spec.yaml");
-            let yaml =
-                fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
-            v2::name_in(&yaml, &dir)
-        }
+        Located::V2(dir) => v2::name_in(&read_spec(&dir)?, &dir),
         Located::V3(dir) => v3::name_from_source(&Source::Local(dir)),
         Located::Smolfile(path) => v3::name_from_source(&Source::Smolfile(path)),
     }
+}
+
+/// A v2 kit directory's `spec.yaml`.
+fn read_spec(dir: &Path) -> Result<String> {
+    let spec = dir.join("spec.yaml");
+    fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))
 }
 
 /// Where a kit REF points, after its trust check.
@@ -561,6 +554,10 @@ pub fn check_launchable<R: Runner>(
 mod tests {
     use super::*;
     use crate::testutil::*;
+
+    fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+        load_with(ctx, reference, false)
+    }
 
     fn allow_local() -> TestEnv {
         test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
