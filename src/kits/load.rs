@@ -104,7 +104,7 @@ fn registries(secrets: &SecretsFile, sandbox: Option<&str>) -> Vec<RegistryEntry
 }
 
 /// Runs F with the logins of `registries` for SANDBOX, read from the secrets file.
-fn with_logins<R: Runner, T>(
+pub(crate) fn with_logins<R: Runner, T>(
     ctx: &Ctx<R>,
     sandbox: Option<&str>,
     f: impl FnOnce(Logins) -> Result<T>,

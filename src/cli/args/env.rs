@@ -24,6 +24,13 @@ pub struct EnvCommon {
     /// sbxenv.yaml files, or directories holding one (default: the current directory)
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
+    #[command(flatten)]
+    pub select: EnvSelectOpts,
+}
+
+/// The flags that pick an environment's name and arguments: `EnvCommon`'s and `env exec`'s.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvSelectOpts {
     /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
     #[arg(long)]
     pub name: Option<String>,
@@ -103,15 +110,8 @@ pub struct EnvRunArgs {
 pub struct EnvExecArgs {
     #[command(flatten)]
     pub flags: super::ExecFlags,
-    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
-    #[arg(long)]
-    pub name: Option<String>,
-    /// Value for an argument the environment file declares, as name=value (can be repeated)
-    #[arg(long = "env-arg", value_name = "NAME=VALUE")]
-    pub env_arg: Vec<String>,
-    /// File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
-    #[arg(long = "env-args-file", value_name = "FILE")]
-    pub env_args_file: Vec<PathBuf>,
+    #[command(flatten)]
+    pub select: EnvSelectOpts,
     /// sbxenv.yaml files or directories before `--`; without `--` every positional is the command
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,

@@ -242,11 +242,7 @@ fn stop_quietly<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
 }
 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
-pub(crate) fn delete_sandbox<R: Runner>(
-    ctx: &Ctx<R>,
-    sb: &Sandbox,
-    forget_secrets: bool,
-) -> Result<()> {
+fn delete_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     delete_keeping_remote(ctx, sb, forget_secrets)?;
     if let Some(repo) = &sb.meta.clone_repo {
         // Best effort: the host repo may be gone.
@@ -274,7 +270,7 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
 }
 
-fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
+pub(crate) fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     delete_sandbox(ctx, sb, forget_secrets)?;
     writeln!(&ctx.out, "Removed sandbox {}", sb.name())?;
     Ok(())

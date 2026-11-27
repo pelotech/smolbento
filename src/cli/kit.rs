@@ -122,16 +122,16 @@ fn push<R: Runner>(
         false => None,
     };
     let payload = checked_payload(ctx, directory)?;
-    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
-    let logins = Logins::new(&registries, &*ctx.store);
-    let manifest = registry::push_v2(reference, &payload, logins)?;
-    let digest = crate::util::sha256_digest(&manifest);
-    writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
-    if let Some((signer, cosign)) = signing {
-        // The manifest just pushed, not whatever the tag points at by now.
-        sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
-    }
-    Ok(0)
+    load::with_logins(ctx, None, |logins| {
+        let manifest = registry::push_v2(reference, &payload, logins)?;
+        let digest = crate::util::sha256_digest(&manifest);
+        writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
+        if let Some((signer, cosign)) = signing {
+            // The manifest just pushed, not whatever the tag points at by now.
+            sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
+        }
+        Ok(0)
+    })
 }
 
 const LOCAL_SIGNING: &str = "signing and verifying a local kit directory isn't supported yet; \
@@ -143,12 +143,11 @@ fn signer(o: &SignOpts) -> Result<signing::Signer> {
         return Ok(signing::Signer::Key(k.clone()));
     }
     if !o.tlog_upload {
-        return Err(super::Unsupported(
+        bail!(super::Unsupported(
             "keyless signing without the transparency log isn't supported yet (it needs a \
              timestamp authority); sign with --key for a private kit"
                 .into(),
-        )
-        .into());
+        ));
     }
     let token = match (&o.identity_token, &o.identity_token_file) {
         (Some(v), _) => Some(signing::Token::Value(v.clone())),
@@ -177,7 +176,7 @@ fn sign_manifest<R: Runner>(
 /// one without a tag or digest is invalid, as in sbx.
 fn published(reference: &str) -> Result<()> {
     if reference_kind(reference) != "registry" {
-        return Err(super::Unsupported(LOCAL_SIGNING.into()).into());
+        bail!(super::Unsupported(LOCAL_SIGNING.into()));
     }
     let name = reference.rsplit('/').next().unwrap_or_default();
     if !reference.contains('@') && !name.contains(':') {
@@ -191,10 +190,10 @@ fn sign<R: Runner>(ctx: &Ctx<R>, reference: &str, opts: &SignOpts) -> Result<i32
     published(reference)?;
     let signer = signer(opts)?;
     let cosign = signing::cosign()?;
-    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
-    let logins = Logins::new(&registries, &*ctx.store);
-    let (manifest, _) = registry::kit_manifest(reference, logins)?;
-    sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
+    load::with_logins(ctx, None, |logins| {
+        let (manifest, _) = registry::kit_manifest(reference, logins)?;
+        sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)
+    })?;
     Ok(0)
 }
 
@@ -250,12 +249,11 @@ fn verify<R: Runner>(
     };
     let checked = (|| {
         let cosign = signing::cosign()?;
-        let registries = SecretsFile::load(&ctx.paths)?.host_registries();
-        let logins = Logins::new(&registries, &*ctx.store);
-        let (manifest, digest) = registry::kit_manifest(reference, logins)?;
-        let bundles = registry::signatures_of(reference, &digest, logins)?;
-        signing::verify_any(&cosign, &manifest, &bundles, std::slice::from_ref(&policy))?;
-        anyhow::Ok(())
+        load::with_logins(ctx, None, |logins| {
+            let (manifest, digest) = registry::kit_manifest(reference, logins)?;
+            let bundles = registry::signatures_of(reference, &digest, logins)?;
+            signing::verify_any(&cosign, &manifest, &bundles, std::slice::from_ref(&policy))
+        })
     })();
     let (identity, issuer) = match &policy {
         signing::Policy::Keyless {
@@ -297,9 +295,9 @@ fn write_output(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Result<i32> {
     // As in sbx, the source policy applies to a pull (not to a push).
     crate::kits::trust::check(&Source::Registry(reference.into()), &ctx.settings)?;
-    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
-    let logins = Logins::new(&registries, &*ctx.store);
-    let payload = crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)?;
+    let payload = load::with_logins(ctx, None, |logins| {
+        crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)
+    })?;
     let shown = output.map_or_else(|| crate::kits::registry::pull_name(reference), String::from);
     let path = ctx.cwd.join(&shown);
     write_output(&path, &payload).with_context(|| format!("writing {shown}"))?;

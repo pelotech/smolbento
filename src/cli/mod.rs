@@ -149,7 +149,9 @@ fn dispatch_with<R: Runner>(
     serve_conn: Option<std::os::unix::net::UnixStream>,
 ) -> Result<i32> {
     if cli.cloud {
-        return Err(Unsupported("--cloud: Docker Cloud sandboxes are not supported".into()).into());
+        bail!(Unsupported(
+            "--cloud: Docker Cloud sandboxes are not supported".into()
+        ));
     }
     ctx.no_input = cli.no_input;
     crate::kits::warn::show(crate::kits::warn::wanted(&ctx.settings, cli.debug));
@@ -220,14 +222,13 @@ fn dispatch_with<R: Runner>(
 }
 
 fn cloud(cmd: &str) -> Result<i32> {
-    Err(Unsupported(format!(
+    bail!(Unsupported(format!(
         "`bento {cmd}` is a Docker Cloud feature and is not supported"
-    ))
-    .into())
+    )))
 }
 
 fn pending(cmd: &str) -> Result<i32> {
-    Err(Unsupported(format!("`bento {cmd}` is not implemented yet")).into())
+    bail!(Unsupported(format!("`bento {cmd}` is not implemented yet")))
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>, output: &OutputArgs) -> Result<i32> {
@@ -266,7 +267,7 @@ pub fn refuse(flags: &[(bool, &str)]) -> Result<()> {
 /// `refuse` with its own reason: the error is `<flag> <why>`.
 pub fn refuse_as(flags: &[(bool, &str)], why: &str) -> Result<()> {
     match flags.iter().find(|(set, _)| *set) {
-        Some((_, flag)) => Err(Unsupported(format!("{flag} {why}")).into()),
+        Some((_, flag)) => bail!(Unsupported(format!("{flag} {why}"))),
         None => Ok(()),
     }
 }

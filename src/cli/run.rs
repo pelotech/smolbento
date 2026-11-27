@@ -41,7 +41,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     let warn_ignored = |sb: &Sandbox| {
         let warnings = [
             ignored_kits_warning(a, sb.name()),
-            ignored_mount_warning(a, sb.name()),
             ignored_options_warning(a, sb.name()),
         ];
         for w in warnings.into_iter().flatten() {
@@ -252,7 +251,8 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         clone,
         skills,
         static_mcp,
-        // Kits, --mount and --deny-network have their own warnings.
+        mount,
+        // Kits and --deny-network have their own warnings.
         kit: _,
         kit_args: _,
         kit_pins: _,
@@ -260,7 +260,6 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         no_fuse: _,
         read_only_files: _,
         disk: _,
-        mount: _,
         deny_network: _,
         // Docker Cloud options: refused before any sandbox is looked up.
         allow_network: _,
@@ -283,6 +282,7 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         (*clone, "--clone"),
         (skills.is_some(), "--skills"),
         (static_mcp.is_some(), "--static-mcp"),
+        (!mount.is_empty(), "--mount"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))
@@ -296,13 +296,6 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         "warning: {} only {verb} when a sandbox is created; {name} already exists",
         given.join(", ")
     ))
-}
-
-/// The warning for `--mount` given to `run` of a sandbox that already exists.
-fn ignored_mount_warning(a: &RunArgs, name: &str) -> Option<String> {
-    (!a.opts.mount.is_empty()).then(|| {
-        format!("warning: --mount only applies when a sandbox is created; {name} already exists")
-    })
 }
 
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.

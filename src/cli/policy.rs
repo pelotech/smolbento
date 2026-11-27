@@ -67,9 +67,9 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
     match cmd {
         PolicyCmd::Init { mode, sandbox } => {
             if sandbox.is_some() {
-                return Err(
-                    Unsupported("policy init --sandbox is a Docker Cloud option".into()).into(),
-                );
+                bail!(Unsupported(
+                    "policy init --sandbox is a Docker Cloud option".into()
+                ));
             }
             policy.mode = Some(mode);
             policy.save(&ctx.paths)?;
@@ -118,7 +118,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         }
         PolicyCmd::Log(a) => {
             if a.kind.as_deref().is_some_and(|k| k == "filesystem") {
-                return Err(Unsupported("smolbento has no filesystem policy".into()).into());
+                bail!(Unsupported("smolbento has no filesystem policy".into()));
             }
             let rows = blocked_rows(ctx, a.sandbox.as_deref(), a.limit)?;
             let text = a.output.structured(&rows)?;
@@ -126,9 +126,9 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         }
         PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
         PolicyCmd::Refresh(_) => {
-            return Err(
-                Unsupported("`bento policy refresh` is for organization policies".into()).into(),
-            );
+            bail!(Unsupported(
+                "`bento policy refresh` is for organization policies".into()
+            ));
         }
     }
     Ok(0)
@@ -141,7 +141,7 @@ fn add<R: Runner>(
     a: RuleArgs,
 ) -> Result<()> {
     if a.protocol.as_deref().is_some_and(|p| p != "tcp") {
-        return Err(Unsupported("only tcp network rules are supported".into()).into());
+        bail!(Unsupported("only tcp network rules are supported".into()));
     }
     if let Some(s) = &a.sandbox {
         name::validate(s)?;
@@ -216,7 +216,9 @@ fn rm<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, a: &PolicyRmArgs) -> Result<
     policy.save(&ctx.paths)?;
     writeln!(&ctx.out, "Removed")?;
     let sandboxes = sandbox::Listing::new(&ctx.vm);
-    print_host_notes(&sandboxes, &before, policy, None, Decision::Deny, &[]);
+    for n in host_notes(&sandboxes, &before, policy, None, Decision::Deny, &[]) {
+        eprintln!("{n}");
+    }
     provision::push_network_with(ctx, policy, &sandboxes)
 }
 
@@ -266,14 +268,10 @@ fn add_rule<R: Runner>(
     if decision == Decision::Deny {
         print_deny_notes(ctx, policy, a.sandbox.as_deref(), &parsed)?;
     }
-    print_host_notes(
-        &sandboxes,
-        &before,
-        policy,
-        a.sandbox.as_deref(),
-        decision,
-        &parsed,
-    );
+    let scope = a.sandbox.as_deref();
+    for n in host_notes(&sandboxes, &before, policy, scope, decision, &parsed) {
+        eprintln!("{n}");
+    }
     provision::push_network_with(ctx, policy, &sandboxes)
 }
 
@@ -358,20 +356,6 @@ fn host_notes<R: Runner>(
     }
     notes.extend(keeps_access_notes(before, after, &sbs));
     notes
-}
-
-/// `host_notes`, on stderr.
-fn print_host_notes<R: Runner>(
-    sandboxes: &sandbox::Listing<R>,
-    before: &Policy,
-    after: &Policy,
-    scope: Option<&str>,
-    decision: Decision,
-    added: &[Resource],
-) {
-    for n in host_notes(sandboxes, before, after, scope, decision, added) {
-        eprintln!("{n}");
-    }
 }
 
 fn print_deny_notes<R: Runner>(
