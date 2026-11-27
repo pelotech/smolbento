@@ -34,9 +34,14 @@ const BUILTINS: [(&str, &str); 2] = [
     ),
 ];
 
+/// The (name, descriptor) of the shipped kit a bare REF names.
+fn builtin_entry(reference: &str) -> Option<&'static (&'static str, &'static str)> {
+    BUILTINS.iter().find(|(n, _)| *n == reference)
+}
+
 /// Whether `reference` is a bare name for a kit shipped inside smolbento.
 pub fn is_builtin(reference: &str) -> bool {
-    BUILTINS.iter().any(|(n, _)| *n == reference)
+    builtin_entry(reference).is_some()
 }
 
 /// Bare names for kits smolbento publishes, loaded from their registry like any registry kit
@@ -53,7 +58,7 @@ pub fn alias(reference: &str) -> Option<&'static str> {
 
 /// The shipped kit a bare REF names. Only the bare word: `./docker` is a path.
 pub fn builtin(reference: &str) -> Option<Result<Kit>> {
-    let (name, yaml) = BUILTINS.iter().find(|(n, _)| *n == reference)?;
+    let (name, yaml) = builtin_entry(reference)?;
     Some(v3::parse(yaml, Source::Builtin(name)).with_context(|| format!("shipped kit {name}")))
 }
 
@@ -166,12 +171,7 @@ pub fn fetch<R: Runner>(
                     registry::pull(&r, pin, &cache, logins)
                 })
             })?,
-            Located::V2(dir) => {
-                let spec = dir.join("spec.yaml");
-                let yaml = fs::read_to_string(&spec)
-                    .with_context(|| format!("reading {}", spec.display()))?;
-                (v2::parse(&yaml, &dir)?, true)
-            }
+            Located::V2(dir) => (v2::parse(&read_spec(&dir)?, &dir)?, true),
             Located::V3(_) if offline => bail!(
                 "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
                  needs the network; run without --offline"
@@ -306,20 +306,21 @@ fn entries(dir: &Path) -> usize {
 /// v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
     let reference = alias(reference).unwrap_or(reference);
-    if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
+    if let Some((name, _)) = builtin_entry(reference) {
         return v3::name_from_source(&Source::Builtin(name));
     }
     match locate(ctx, reference, false, Position::Agent)? {
         Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
-        Located::V2(dir) => {
-            let spec = dir.join("spec.yaml");
-            let yaml =
-                fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
-            v2::name_in(&yaml, &dir)
-        }
+        Located::V2(dir) => v2::name_in(&read_spec(&dir)?, &dir),
         Located::V3(dir) => v3::name_from_source(&Source::Local(dir)),
         Located::Smolfile(path) => v3::name_from_source(&Source::Smolfile(path)),
     }
+}
+
+/// A v2 kit directory's `spec.yaml`.
+fn read_spec(dir: &Path) -> Result<String> {
+    let spec = dir.join("spec.yaml");
+    fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))
 }
 
 /// Where a kit REF points, after its trust check.

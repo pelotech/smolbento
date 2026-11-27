@@ -1,8 +1,6 @@
 //! Kit signatures in a registry: sbx's signature referrers, pushed and listed.
 
 use anyhow::{Context, Result, bail};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use oci_client::Reference;
 use oci_client::RegistryOperation;
 use oci_client::errors::{OciDistributionError, OciErrorCode};
@@ -15,7 +13,7 @@ use crate::kits::registry::auth::Logins;
 use crate::util::sha256_digest;
 
 use super::{parse_ref, with_client};
-use crate::kits::artifact::EMPTY_MEDIA_TYPE;
+use crate::kits::artifact::empty_descriptor;
 
 pub(super) const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
 pub(super) const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
@@ -31,12 +29,7 @@ pub(super) fn signature_manifest(
         "schemaVersion": 2,
         "mediaType": OCI_IMAGE_MEDIA_TYPE,
         "artifactType": SIGNATURE_ARTIFACT,
-        "config": {
-            "mediaType": EMPTY_MEDIA_TYPE,
-            "digest": sha256_digest(b"{}"),
-            "size": 2,
-            "data": STANDARD.encode(b"{}"),
-        },
+        "config": empty_descriptor(),
         "layers": [{"mediaType": BUNDLE_MEDIA_TYPE, "digest": bundle_digest, "size": bundle_len}],
         "subject": subject,
         "annotations": {"org.opencontainers.image.created": created},
