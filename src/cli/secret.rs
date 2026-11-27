@@ -67,12 +67,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 (a.refresh.is_some(), "--refresh"),
                 (a.no_verify || a.show_error, "--no-verify/--show-error"),
             ])?;
-            if a.placeholder.is_some() {
-                return Err(Unsupported(
-                    "--placeholder is not supported; smolvm chooses the placeholder".into(),
-                )
-                .into());
-            }
+            super::refuse_as(
+                &[(a.placeholder.is_some(), "--placeholder")],
+                "is not supported; smolvm chooses the placeholder",
+            )?;
             check_env_name(&a.env)?;
             if let Some(owner) = services::env_var_owner(&a.env) {
                 bail!(
@@ -99,9 +97,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             let _lock = locked(ctx, &mut file)?;
             rm(ctx, &mut file, a)?
         }
-        SecretCmd::Import(_) => {
-            return Err(Unsupported("`bento secret import` is not implemented yet".into()).into());
-        }
+        SecretCmd::Import(_) => return super::pending("secret import"),
     }
     Ok(0)
 }

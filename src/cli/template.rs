@@ -18,12 +18,11 @@ use crate::templates::{Entry, Store, TemplateRef};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
     match cmd {
-        TemplateCmd::Inspect(_) => Err(Unsupported(
+        TemplateCmd::Inspect(_) => bail!(Unsupported(
             "'template inspect' requires --cloud in v1; local templates are smolvm packs; \
              list them with bento template ls"
                 .into(),
-        )
-        .into()),
+        )),
         TemplateCmd::Save(a) => save(ctx, &a).map(|()| 0),
         TemplateCmd::Ls(a) => ls(ctx, &a).map(|()| 0),
         TemplateCmd::Rm(a) => rm(ctx, &a).map(|()| 0),

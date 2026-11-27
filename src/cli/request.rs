@@ -220,12 +220,11 @@ pub(crate) fn kit_target<R: Runner>(
         return Ok((req, Workload::Template(Box::new(e))));
     }
     if opts.pull.as_deref() == Some("never") {
-        return Err(super::Unsupported(
+        bail!(super::Unsupported(
             "--pull never works only with a saved template (see `bento template ls`); smolvm \
              pulls missing images"
                 .into(),
-        )
-        .into());
+        ));
     }
     if let Some(reference) = agents::kit_ref(&ctx.env, target) {
         let req = base_request(ctx, target, paths, opts, default_to_cwd)?;
