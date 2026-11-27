@@ -129,7 +129,7 @@ If the error persists, read the daemon log:
 bento exec --privileged NAME cat /var/log/dockerd.log
 ```
 
-## `sandbox name … is already used by workspace …`
+## Sandbox name already used by another workspace
 
 Cause: the default name, `<agent>-<directory name>`, belongs to another directory's sandbox (two
 directories with the same name). The error suggests a name with the parent directory:
@@ -186,7 +186,7 @@ set, or set `ssh.agentSocketPath` ([Usage](usage.md#ssh-agent)).
 Cause: `bento skills add` couldn't clone the repository with your host `git`, which never prompts.
 For a private repository, set up a credential helper or SSH agent first.
 
-## `bundled skills … cannot be exposed in …`
+## Bundled skill name already used
 
 The full message is `failed to compose shared skills into the sandbox: bundled skills NAME cannot be
 exposed in DIR: another skill already uses the name`. Cause: a kit's required bundled skill has the

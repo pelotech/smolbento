@@ -139,6 +139,8 @@ bindings:
   `clonedWorkspaceSize` the disk for Docker's data and a clone's workspace (the larger wins).
 - `fuse` and `pullPolicy: missing|never` are accepted. Secret service names must be ones `bento
   secret set` knows.
+- Environment files inside a writable mounted workspace are made read-only at each start, unless
+  `writableEnvFiles: true`.
 
 Limits: fields smolbento doesn't support yet exit 2 and name the field. Which fields, and how the
 others differ from sbx: [sbx compatibility](sbx-compatibility.md#environment-files).

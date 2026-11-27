@@ -392,7 +392,7 @@ shared skills`) and goes on.
   hold only the bundled skills.
 - A bundled skill named like a stored skill is a conflict: the store link comes first. A required
   one fails the create before the sandbox is made
-  ([Troubleshooting](troubleshooting.md#bundled-skills--cannot-be-exposed-in-)).
+  ([Troubleshooting](troubleshooting.md#bundled-skill-name-already-used)).
 - `kit add` refuses kits with either capability, since mounts are set at create. Create a new
   sandbox with the kit.
 

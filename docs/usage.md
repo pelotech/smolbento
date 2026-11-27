@@ -38,7 +38,7 @@ resumes where the agent left off. `create` makes a sandbox that runs until you s
 Two directories with the same name (`pelotech/infrastructure` and `uki-code/infrastructure`) would
 get the same default name. Without `--name`, `run` and `create` refuse a name another directory's
 sandbox holds and suggest one with the parent directory
-([Troubleshooting](troubleshooting.md#sandbox-name--is-already-used-by-workspace-)).
+([Troubleshooting](troubleshooting.md#sandbox-name-already-used-by-another-workspace)).
 `bento settings set sandbox.autoName true` takes the suggested name instead. Either way, a later
 `bento run claude` in that directory finds its sandbox by the directory, whatever it's called.
 
