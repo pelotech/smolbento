@@ -165,9 +165,11 @@ When things take effect:
   still applies (the global one, or a fork's original's), else a fixed non-secret value. A new value
   for a sandbox an earlier smolbento made, when a kit gave it the service's credential, waits for
   the next start.
-- A secret for a service the sandbox wasn't created with needs a **recreate** on a hosted sandbox
-  (the default), and `secret set` tells you which. With `network.egress=smolvm` it's bound to a
-  running sandbox at once, or from the next start of one that booted with no secrets.
+- A secret for a service the sandbox wasn't created with is bound **at once** to a running hosted
+  sandbox (the default): its egress process restarts, so open connections drop, and commands
+  started afterwards see the variable. With `network.egress=smolvm` it's bound to a running sandbox
+  at once, or from the next start of one that booted with no secrets. A stopped sandbox gets it at
+  its next start.
 
 ### Hosted egress
 
