@@ -12,7 +12,7 @@ use regex_lite::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
+use super::descriptor::{self, ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::{CAP_NS, args, capability};
 use crate::skills::Mode;
@@ -788,26 +788,11 @@ fn credential(c: CredCfg) -> Result<CredReq> {
         );
     }
     let phases = phases(c.phase)?;
-    let (env, inject) = match c.api_key {
-        Some(k) => {
-            let inject = k
-                .inject
-                .into_iter()
-                .enumerate()
-                .map(|(n, i)| {
-                    i.into_inject()
-                        .with_context(|| format!("apiKey.inject[{n}]"))
-                })
-                .collect::<Result<_>>()?;
-            ((!k.name.is_empty()).then_some(k.name), inject)
-        }
-        None => (None, vec![]),
-    };
-    let oauth = c.oauth.map(|o| OAuthReq {
-        passthrough: o.passthrough,
-        token_host: o.token_endpoint.map(|t| t.host),
-        resource_hosts: o.resource_hosts,
-    });
+    let (env, inject) =
+        descriptor::api_key(c.api_key, |n, e| e.context(format!("apiKey.inject[{n}]")))?;
+    let oauth = c
+        .oauth
+        .map(|o| descriptor::oauth(o.passthrough, o.token_endpoint, o.resource_hosts));
     Ok(CredReq {
         service: c.service,
         install: phases.contains(&SshPhase::Install),

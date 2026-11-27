@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
+use super::descriptor::{self, ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::v3::{self, check_name, name_from_source};
 use crate::kits::{AGENT_HOME, CAP_NS};
@@ -371,25 +371,11 @@ fn credential(c: CredCfg) -> Result<CredReq> {
     if c.api_key.is_none() && c.oauth.is_none() {
         bail!("credentials: {} needs apiKey or oauth", c.service);
     }
-    let (env, inject) = match c.api_key {
-        Some(k) => {
-            let inject = k
-                .inject
-                .into_iter()
-                .map(|i| {
-                    i.into_inject()
-                        .map_err(|e| anyhow!("credentials: {} {e}", c.service))
-                })
-                .collect::<Result<_>>()?;
-            ((!k.name.is_empty()).then_some(k.name), inject)
-        }
-        None => (None, vec![]),
-    };
-    let oauth = c.oauth.map(|o| OAuthReq {
-        passthrough: o.passthrough,
-        token_host: o.token_endpoint.map(|t| t.host),
-        resource_hosts: o.resource_hosts,
-    });
+    let (env, inject) =
+        descriptor::api_key(c.api_key, |_, e| anyhow!("credentials: {} {e}", c.service))?;
+    let oauth = c
+        .oauth
+        .map(|o| descriptor::oauth(o.passthrough, o.token_endpoint, o.resource_hosts));
     Ok(CredReq {
         service: c.service,
         install: false,

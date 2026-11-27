@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use super::model::Inject;
+use super::model::{Inject, OAuthReq};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -63,6 +63,37 @@ impl InjectCfg {
             format,
             basic_user: self.username,
         })
+    }
+}
+
+/// A credential's `apiKey` as its env var (none for an empty name) and inject rules; ERR adds
+/// rule N's context to its error.
+pub(super) fn api_key(
+    key: Option<ApiKeyCfg>,
+    err: impl Fn(usize, anyhow::Error) -> anyhow::Error,
+) -> Result<(Option<String>, Vec<Inject>)> {
+    let Some(k) = key else {
+        return Ok((None, vec![]));
+    };
+    let inject = k
+        .inject
+        .into_iter()
+        .enumerate()
+        .map(|(n, i)| i.into_inject().map_err(|e| err(n, e)))
+        .collect::<Result<_>>()?;
+    Ok(((!k.name.is_empty()).then_some(k.name), inject))
+}
+
+/// A credential's `oauth` fields that smolbento acts on.
+pub(super) fn oauth(
+    passthrough: bool,
+    token_endpoint: Option<TokenEndpoint>,
+    resource_hosts: Vec<String>,
+) -> OAuthReq {
+    OAuthReq {
+        passthrough,
+        token_host: token_endpoint.map(|t| t.host),
+        resource_hosts,
     }
 }
 
