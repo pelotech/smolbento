@@ -47,31 +47,30 @@ v2 and v3 kits can't share a sandbox. The built-in agents are v3 kits; `docker` 
 go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
-a local kit, even if a directory has that name; only `docker`, `git-signing` and `nix` are bare kit names. `bento create my-kit` fails with `unknown agent "my-kit"`,
-and `--kit my-kit` says `not a local path and does not look like a registry reference`. Write
-`docker.io/library/alpine` for the alpine image.
+a local kit, even if a directory has that name; only `docker`, `git-signing` and `nix` are bare kit
+names. `bento create my-kit` is an unknown agent and `--kit my-kit` an error (the messages: [sbx
+compatibility](sbx-compatibility.md#what-works-as-in-sbx)). Write `docker.io/library/alpine` for
+the alpine image.
 
 Kits declare versions with `provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A
-missing or mismatched capability stops the create with `resolve: the kit set is not coherent:` and
-one line per problem. sbx's agent kits provide their own name (`claude@2.1.325`), so
-`requires: [claude]` works on `claude`.
+missing or mismatched capability stops the create, with one line per problem. Agent kits provide
+their own name, so `requires: [claude]` works on `claude`.
 
 `bento kit inspect REF` prints the kit's summary, capabilities, source, provides, requires,
 credentials (with the hosts each secret goes to) and arguments. `bento kit validate REF` prints
 `✓ REF — valid`, or the error and exits 1. `--json` or `--format json|yaml` print machine-readable
-output (`inspect`: a v2-shaped descriptor with smolbento's extras under `smolbento`; `validate`:
-`{reference, kind, valid, warnings}`, plus `errors`). `--offline` checks a local v2 kit or Smolfile
-without the network or source policy.
+output ([sbx compatibility](sbx-compatibility.md#differences)). `--offline` checks a local v2 kit or
+Smolfile without the network or source policy.
 
 `--kit-arg NAME=VALUE` applies to every kit, `--kit-arg KIT.NAME=VALUE` to one, and `--kit-args-file
 FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last value wins, and a
 per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is ignored. Argument
 values aren't secret: they reach the environment and smolvm's machine config, and are kept with the
 sandbox, in templates saved from it, and in `--output` archives. Put secrets in
-[credentials](network-and-secrets.md#secrets). An argument with no value and no default fails with
-`create-phase kit arg "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a
-kit is an error. Unquoted numbers and booleans in `default:` and `enum:` are read as strings. A
-`pattern:` has to match the whole value, as if it were written `^(?:…)$`.
+[credentials](network-and-secrets.md#secrets). An argument with no value and no default is an error;
+`--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error. Unquoted numbers and booleans
+in `default:` and `enum:` are read as strings. A `pattern:` has to match the whole value, as if it
+were written `^(?:…)$`.
 
 In a kit, `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}` are replaced, in any field of a
 capability's config and in its map keys. Any other `${{ … }}`, such as a GitHub Actions expression
@@ -121,10 +120,10 @@ What a kit does, and when:
   variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment,
   but no install step, v2 or v3, sees a credential that is only for runtime (every v2 credential).
 - A required credential with no secret set stops create (or `kit add`), naming the `bento secret
-  set` command to run first; sbx warns and goes on. An optional one is skipped, and the kit runs without it. A built-in service's secret goes only to its own hosts
-  ([Security](SECURITY.md#kits)). A credential needed only for install is available during install;
-  the sandbox then restarts once without it: its variable is gone, and requests to its hosts go out
-  without it.
+  set` command to run first. An optional one is skipped, and the kit runs without it. A built-in
+  service's secret goes only to its own hosts ([Security](SECURITY.md#kits)). A credential needed
+  only for install is available during install; the sandbox then restarts once without it: its
+  variable is gone, and requests to its hosts go out without it.
 - Volumes live on the sandbox's disk and are removed with it. Host mounts are shared and kept ([kit
   host mounts](#kit-host-mounts)).
 
@@ -216,8 +215,9 @@ names gets it, even when no kit has text. The combined text warns above 64 KiB a
   refuses it rather than putting the text in the file itself.
 - When no kit names a file and the workload kit declares no `agent-context`, mixin instructions are
   dropped (`kit.showWarnings` shows a warning).
-- `kit add` of a kit that names its own file needs a recreate (`recreate required: agent file`): a
-  new file gets every kit's instructions, and only a create has them all.
+- `kit add` of a kit that names its own file needs a new sandbox
+  ([Troubleshooting](troubleshooting.md#recreate-required)): a new file gets every kit's
+  instructions, and only a create has them all.
 - A kit can't end the section: a `<!-- sbx:` marker in kit text is written as `&lt;!-- sbx:`.
 - `kit add` puts the new kit's text after what the section holds. If an add fails partway and you
   run it again, that kit's inline `@2` text is there twice; remove one copy by hand.
@@ -229,15 +229,17 @@ names gets it, even when no kit has text. The combined text warns above 64 KiB a
 `bento kit add SANDBOX REF` applies a mixin to an existing sandbox without a restart (a stopped
 sandbox is started). A kit that changes the image, credentials, ports, volumes, host mounts, agent
 skills, the SSH agent, resources, environment variables (an exported argument included) or auto-stop
-needs a new sandbox: `kit add` says `recreate required` and changes nothing. A kit that opens
-network access asks first; `-y` grants it, and without a terminal it fails.
+needs a new sandbox: `kit add` refuses it and changes nothing
+([Troubleshooting](troubleshooting.md#recreate-required)). A kit that opens network access asks
+first; `-y` grants it, and without a terminal it fails.
 
 ### SSH agent grant
 
 A kit asks for your SSH agent with `ssh-agent@1`: `phase: install`, `runtime` or both, and
 `sign: [git, …]` to allow only those namespaces. A v3 workload kit gets no agent without it. A
-required grant with no agent stops the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH
-agent, but SSH_AUTH_SOCK is unset`); an optional one is left out with a note. An `install` grant is
+required grant with no agent stops the create
+([Troubleshooting](troubleshooting.md#needs-an-ssh-agent-but-ssh_auth_sock-is-unset)); an optional
+one is left out with a note. An `install` grant is
 served only during install steps, and a step sees `SSH_AUTH_SOCK` only if it lists it in `env`.
 Without a `runtime` grant, the guest's `/run/ssh-agent.sock` is removed once the install steps
 finish, and at every later start.
@@ -263,11 +265,11 @@ To bind your own directory, pass `--mount` at create:
 bento create ./my-kit . --mount ~/agent-cache:/home/agent/.cache/tool
 ```
 
-`--mount HOST:SANDBOX_PATH` is repeatable. `SANDBOX_PATH` must be one a kit declares (`no kit
-declares host-mount@1 at "PATH"` otherwise). `HOST` is resolved from the current directory and must
-exist. Mounts are set at create only: `bento run --mount` on an existing sandbox still checks `HOST`
-(an error if missing or invalid), then warns and ignores it. `kit add` of such a kit says `recreate
-required`. `mounts:` in an [environment file](environments.md#environments-sbxenvyaml) does the same.
+`--mount HOST:SANDBOX_PATH` is repeatable. `SANDBOX_PATH` must be one a kit declares. `HOST` is
+resolved from the current directory and must exist. Mounts are set at create only: `bento run
+--mount` on an existing sandbox still checks `HOST` (an error if missing or invalid), then warns and
+ignores it. `kit add` of such a kit needs a new sandbox. `mounts:` in an [environment
+file](environments.md#environments-sbxenvyaml) does the same.
 
 `bento inspect` shows `Host mounts: HOST:PATH` (`mounts` in JSON). `rm` and `prune` never delete
 these directories. `bento kit mounts ls` lists them (`ID`, the kit, its path, the host directory;
@@ -307,8 +309,8 @@ The store is `~/.local/share/smolbento/agent-skills/` (`$XDG_DATA_HOME/smolbento
 skills over, and `import --dry-run` previews them.
 
 - `add` clones with your host `git` (HTTPS, SSH, `http://`, `git://`), so private repositories work.
-  git never prompts, so set up a credential helper or SSH agent first. A failed clone prints `clone
-  skills repository: exit status N: ...`.
+  git never prompts, so set up a credential helper or SSH agent first
+  ([Troubleshooting](troubleshooting.md#clone-skills-repository-exit-status-n)).
 - Each directory below the repository root with a `SKILL.md` is a skill; directories inside a skill
   aren't searched. A root `SKILL.md` makes the whole repository one skill. Symlinks and special
   files are never copied.
@@ -389,8 +391,8 @@ shared skills`) and goes on.
   store); every directory links into `/run/sbx/skills-shared` instead. With `off`, the directories
   hold only the bundled skills.
 - A bundled skill named like a stored skill is a conflict: the store link comes first. A required
-  one fails the create before the sandbox is made, with `failed to compose shared skills into the
-  sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the name`.
+  one fails the create before the sandbox is made
+  ([Troubleshooting](troubleshooting.md#bundled-skill-name-already-used)).
 - `kit add` refuses kits with either capability, since mounts are set at create. Create a new
   sandbox with the kit.
 
@@ -431,8 +433,7 @@ Limits:
   sandbox, that means the sandbox itself) are refused. URLs are stored as given, so keep secrets out
   of query strings.
 - `bento template save` refuses a sandbox created with `--static-mcp`.
-- `mcp auth`, `mcp load` and `mcp unload` aren't supported ([sbx
-  compatibility](sbx-compatibility.md#mcp-servers)).
+- Other differences from sbx's MCP gateway: [sbx compatibility](sbx-compatibility.md#mcp-servers).
 
 ## Templates
 

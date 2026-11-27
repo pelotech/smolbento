@@ -85,8 +85,8 @@ bento env rm
 - Registry logins pull this sandbox's image and kits. They're resolved at create and stored for that
   sandbox only, ahead of a host-wide `bento secret set --registry` login. They're removed with the
   sandbox.
-- Bindings add extra domains a service's credential may go to. As in sbx, they're global: they go
-  into your secrets file at create, for every later sandbox. `env rm` leaves them; `env rm
+- Bindings add extra domains a service's credential may go to. They're global: they go into your
+  secrets file at create, for every later sandbox. `env rm` leaves them; `env rm
   --prune-bindings` removes each declared service's whole binding.
 - `mcp.servers` entries with a `url` are registered as `bento mcp add` would (they stay after `env
   rm`) and given to the agent as `--static-mcp` does, with the same limits. Entries with a `command`
@@ -134,15 +134,13 @@ bindings:
       domains: [uploads.github.com]
 ```
 
-Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
-`sandboxOptions.profile`, `display`, `gpu`, `usb` and `pullPolicy: always`.
-
-- `fuse` and `pullPolicy: missing|never` are accepted. `refresh` and `backend` on a secret do
-  nothing.
 - `rootSize`, `dockerSize` and `clonedWorkspaceSize` take sizes such as `30g`, rounded up to whole
   GiB. `rootSize` sizes the disk for the root filesystem's changes; `dockerSize` and
   `clonedWorkspaceSize` the disk for Docker's data and a clone's workspace (the larger wins).
+- `fuse` and `pullPolicy: missing|never` are accepted. Secret service names must be ones `bento
+  secret set` knows.
 - Environment files inside a writable mounted workspace are made read-only at each start, unless
   `writableEnvFiles: true`.
-- Secret service names must be ones `bento secret set` knows. See [sbx
-  compatibility](sbx-compatibility.md#environment-files).
+
+Limits: fields smolbento doesn't support yet exit 2 and name the field. Which fields, and how the
+others differ from sbx: [sbx compatibility](sbx-compatibility.md#environment-files).

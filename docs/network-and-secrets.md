@@ -64,13 +64,11 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   `run` warns and changes nothing. If the create fails, its rules are removed.
 - A sandbox's secret hosts, and their subdomains, are always reachable. `policy deny` of one is
   refused, naming the secret's service.
-- Ports (`host.example.com:8080`) are enforced for hosted sandboxes, in allows and denies. smolvm
-  can't filter by port, so with `network.egress=smolvm` an allow opens every port and a deny with a
-  port isn't enforced: deny the host without a port. The exception is a deny with exactly the same
-  text as an allow, which cancels that allow. `policy ls --wide` says in STATUS which rules smolvm
-  doesn't fully enforce; `policy check` without a port checks 443. Details are in [sbx
-  compatibility](sbx-compatibility.md).
-- `balanced` allows its hosts on any port. sbx limits them to 443.
+- Ports (`host.example.com:8080`) are enforced for hosted sandboxes, in allows and denies;
+  `policy check` without a port checks 443. smolvm can't filter by port, so with
+  `network.egress=smolvm` deny the host without a port ([sbx
+  compatibility](sbx-compatibility.md#differences-youll-notice)). `policy ls --wide` says in STATUS
+  which rules smolvm doesn't fully enforce.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
 - Policy changes reach only the sandboxes this setup (its data directory) created, even when another
@@ -79,14 +77,12 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   its own denials (by port or name) to `egress.log` instead. `policy approval` lists hosts with no
   rule yet, and the host is the approval ID. `--option dismiss` adds no rule and hides the host
   until it is blocked again.
-- `policy check network` takes a URL too, as sbx does: `https://example.com/x` checks
-  `example.com:443` (`http` is port 80; another scheme needs a port). The host's loopback
-  (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) is denied whatever the mode unless the
-  sandbox has host access, which a `localhost` allow rule gives at create; the check says so.
-- `policy check network --protocol udp HOST:PORT` checks a UDP destination. With
-  `network.egress=smolvm`, smolvm admits UDP wherever its allow list admits TCP, except port 53: it
-  answers DNS itself. A hosted sandbox sends no UDP but DNS ([Hosted egress](#hosted-egress)), and an
-  allowed verdict says so.
+- `policy check network` takes a URL too: `https://example.com/x` checks `example.com:443`. The
+  host's loopback (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) is denied whatever the
+  mode unless the sandbox has host access, which a `localhost` allow rule gives at create; the check
+  says so.
+- `policy check network --protocol udp HOST:PORT` checks a UDP destination. Which UDP each egress
+  mode sends: [sbx compatibility](sbx-compatibility.md#differences-youll-notice).
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
   sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
   the connection's verdict; `policy ls --wide` shows the request rules.
@@ -122,7 +118,7 @@ bento policy allow network --sandbox claude-myrepo localhost
   but only sandboxes created with host access can connect.
 - `127.0.0.1`, `::1` and `host.docker.internal` rules aren't host-services rules; the rule must say
   `localhost`. A blocked request gets connection refused (on a hosted sandbox, its connection is
-  reset). sbx returns `403 Approval required` instead.
+  reset).
 
 ## Secrets
 
@@ -182,12 +178,8 @@ when it starts, and the guest sees placeholders as usual.
 The egress process doesn't get your shell's environment: only bento's own `SMOLBENTO_*` variables
 and a few of your session's (`HOME`, `PATH`, `DISPLAY`, `WAYLAND_DISPLAY`, `SSH_CONNECTION`, and
 `SSH_AUTH_SOCK` on Linux). So a `--ref` or `--command` secret that needs a shell variable (`op read`
-with `OP_SERVICE_ACCOUNT_TOKEN`, `aws` with `AWS_PROFILE`, `printf %s "$TOKEN"`) gets nothing there,
-and requests using it fail with `502`. The egress process lists the secrets it couldn't resolve, and
-`bento create` and `start` warn about each once the sandbox is up, if the process has got that far.
-Use a source that doesn't need the shell's variables (a stored value, a command that reads a file),
-or create the sandbox with `network.egress=smolvm`, where secrets resolve in the shell that starts
-it.
+with `OP_SERVICE_ACCOUNT_TOKEN`, `aws` with `AWS_PROFILE`, `printf %s "$TOKEN"`) gets nothing there
+([Troubleshooting](troubleshooting.md#502-from-a-secrets-or-registrys-host)).
 
 Each connection is decided twice, and smolvm's allow list still applies first:
 
@@ -202,7 +194,7 @@ Each connection is decided twice, and smolvm's allow list still applies first:
   unless a deny matches the name or the address.
 
 - **What the guest sees**, either way: the connection opens, then resets, not refused. smolvm accepts
-  it before asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.
+  it before asking the egress process ([Troubleshooting](troubleshooting.md#connections-reset)).
 - A client that speaks neither TLS nor HTTP (SSH) is judged by address and port only, so name rules
   don't apply to it. TLS without SNI, or HTTP without one `Host:`, has no name: it passes only on an
   IP or CIDR allow rule (or `allow-all`). The name is whatever the guest sends, so name rules stop
@@ -216,7 +208,7 @@ changes as for any sandbox: a switch between `allow-all` and a restricted mode r
 next start. A `policy.toml` that can't be read denies every connection until it can, with the
 reason logged.
 
-Caveats:
+Limits:
 
 - **CDNs:** a name rule judges the name the guest sends, and many sites share a CDN's addresses. An
   address rule or smolvm's allow list (resolved at start) can admit or refuse a shared address for
@@ -242,8 +234,7 @@ until the install hooks are done, or until the next start removes ones an interr
 
 The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that failed
 to resolve (by name, never value), and each denied connection with its reason (`deny
-gist.github.com:443: …`). Look there when a hosted sandbox's connections fail. `bento rm` removes
-the log with the sandbox.
+gist.github.com:443: …`). `bento rm` removes the log with the sandbox.
 
 A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its parent's
 CA and token: the copied guest already trusts that CA and holds those placeholders. It keeps the
@@ -267,9 +258,9 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
 - **Ruled hosts are decrypted.** The egress process decrypts each host a bounded rule names, and
   each secret's host, with the sandbox's own CA, which the guest trusts. Every other connection is
   passed through as before.
-- **A refused request gets `403`.** The body names a deny rule (`… (rule r-1a2b3c4d)`), or on a host
-  that only bounded allows admit, says `no rule allows POST /post on httpbin.org`. It never shows a
-  rule's content.
+- **A refused request gets `403`.** The body names the deny rule, or on a host that only bounded
+  allows admit, says no rule allows the request. It never shows a rule's content
+  ([Troubleshooting](troubleshooting.md#403-from-a-hosted-sandbox)).
 - **What a bounded rule means** (sbx's meaning):
   - A bounded deny acts on the requests it names, never on the whole host: `deny H --method POST`
     refuses POSTs, and GETs and other ports pass. A deny wins over any allow.
@@ -283,10 +274,10 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
     needs all of them to match.
   - Paths and queries follow sbx (any case) for `bento policy` rules, and the kit spec (exact case)
     for kit rules.
-  - A path is judged with its dot segments resolved. One with `%2f` or `%5c`, double encoding, `%u`,
-    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`. So is a
-    target with a `#` fragment, or an encoded control byte in the query (`?q=a%0Ab`). Such a request
-    to a ruled host is refused.
+  - A path is judged with its dot segments resolved. A request to a ruled host is refused as
+    ambiguous when its path has `%2f` or `%5c`, double encoding, `%u`, `%00`, a control character or
+    invalid UTF-8, when its target has a `#` fragment, or when its query has an encoded control byte
+    (`?q=a%0Ab`).
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
   bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
   bounded deny on `localhost` acts on the whole host port: host services aren't decrypted. A
@@ -305,8 +296,7 @@ On a ruled host:
 - **Replies are asked for uncompressed** (`Accept-Encoding: identity`). One compressed anyway is
   decoded if it's gzip or deflate, up to 64 MiB. A br or zstd reply, or a larger one, gets `502`.
 - **WebSocket:** the upgrade request is judged. The frames after it pass unfiltered.
-- **Plain HTTP is refused** (a reset, logged as `plain HTTP to a host with request rules`). The
-  egress process can't judge it per request yet: use HTTPS.
+- **Plain HTTP is refused** (a reset). The egress process can't judge it per request yet: use HTTPS.
 - **Other protocols pass** a host with only bounded denies, as in sbx: SSH to `github.com` still
   works under `deny github.com --method POST`. Deny the SSH port (`github.com:22`) to block pushes
   completely. Where a bounded allow names the host, a connection that can't be read is refused.
@@ -346,18 +336,18 @@ Used for:
   sets the `Authorization` header there. Before a build that names `HOST/<repo>` in its descriptor,
   smolbento gets a short-lived pull token and starts the builder with it, so a build must start
   pulling within a few minutes. Only `HOST/…` references count.
-- A build that reaches a logged-in registry without naming it that way gets `502 credential
-  unavailable` and fails, naming the registry. Write the image as `HOST/<repo>`, or remove the
-  login.
-- Local builds don't yet support Docker Hub logins (`FROM debian` gets no token) or non-default
-  ports (`registry.corp:5000`). Registries that accept Basic auth only work for kit pulls, not
-  builds.
+- A build that reaches a logged-in registry without naming it that way fails, naming the registry
+  ([Troubleshooting](troubleshooting.md#502-from-a-secrets-or-registrys-host)).
 - Concurrent builds that use a registry login restart the builder, so run them one at a time. Adding
   or removing a login recreates the builder and its cache at the next build.
 
 Registry logins appear only in plain `bento secret ls`, not with `-g`, `--sandbox` or a service
-filter. `--sandbox` and `--all-sandboxes` (a login for a sandbox's own `docker pull`) aren't
-supported yet.
+filter.
+
+Limits: local builds don't yet support Docker Hub logins (`FROM debian` gets no token) or
+non-default ports (`registry.corp:5000`). Registries that accept Basic auth only work for kit
+pulls, not builds. A login for a sandbox's own `docker pull` isn't supported yet ([sbx
+compatibility](sbx-compatibility.md#parses-not-implemented-yet-exit-2)).
 
 `bento rm` removes that sandbox's own secrets and per-sandbox policy. `bento reset` removes all secrets
 too, unless you pass `--preserve-secrets`.
