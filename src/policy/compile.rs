@@ -293,15 +293,10 @@ pub fn install_deny_cidr_notes(policy: &Policy, sandbox: &str, host_access: bool
             if lasting.contains(&c) {
                 continue;
             }
-            let i = match per_kit.iter().position(|(k, _)| *k == kit) {
-                Some(i) => i,
-                None => {
-                    per_kit.push((kit, Vec::new()));
-                    per_kit.len() - 1
-                }
-            };
-            if !per_kit[i].1.contains(&c) {
-                per_kit[i].1.push(c);
+            match per_kit.iter_mut().find(|(k, _)| *k == kit) {
+                Some((_, cidrs)) if !cidrs.contains(&c) => cidrs.push(c),
+                Some(_) => {}
+                None => per_kit.push((kit, vec![c])),
             }
         }
     }

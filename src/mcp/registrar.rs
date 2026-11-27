@@ -12,10 +12,7 @@ pub fn has_registrar(agent: &str) -> bool {
 /// `None` for an agent without a registrar. A header's `${placeholder}` becomes the guest's
 /// `$SBX_MCP_…` variable, which holds smolvm's placeholder for the secret, never its value.
 pub fn register_script(agent: &str, name: &str, server: &Server) -> Option<String> {
-    match agent {
-        "claude" => Some(claude(name, server)),
-        _ => None,
-    }
+    has_registrar(agent).then(|| claude(name, server))
 }
 
 /// `claude mcp add`, as in Claude Code's docs: options, the name, then the URL (and `--header`s

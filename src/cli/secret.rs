@@ -908,9 +908,7 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
     let auth_endpoint = a.registry_auth_endpoint;
     let username = a.username.filter(|u| !u.is_empty());
     let host = a.registry.unwrap_or_default().trim().to_ascii_lowercase();
-    if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
-        bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
-    }
+    crate::secrets::check_registry_host(&host, &format!("'{host}'"))?;
     // The login is only ever sent over https, or plain http to localhost (see `kits::registry::auth::trusted_realm`).
     if let Some(e) = &auth_endpoint
         && !e.starts_with("https://")

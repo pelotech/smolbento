@@ -321,19 +321,11 @@ fn in_cidr(ip: IpAddr, net: IpAddr, prefix: u8) -> bool {
     };
     match (ip, net) {
         (IpAddr::V4(a), IpAddr::V4(b)) => {
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix)
-            };
+            let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
             u32::from(a) & mask == u32::from(b) & mask
         }
         (IpAddr::V6(a), IpAddr::V6(b)) => {
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u128::MAX << (128 - prefix)
-            };
+            let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
             u128::from(a) & mask == u128::from(b) & mask
         }
         _ => false,

@@ -62,13 +62,6 @@ fn run(program: &str, args: &[&str], input: Option<&str>) -> Result<(i32, String
     ))
 }
 
-fn strip_newline(mut s: String) -> String {
-    while s.ends_with('\n') || s.ends_with('\r') {
-        s.pop();
-    }
-    s
-}
-
 /// macOS login keychain via `/usr/bin/security`.
 pub struct MacKeychain;
 
@@ -137,7 +130,7 @@ impl SecretStore for MacKeychain {
             None,
         )?;
         match code {
-            0 => decode_keychain_value(&strip_newline(out)).map(Some),
+            0 => decode_keychain_value(out.trim_end_matches(['\n', '\r'])).map(Some),
             NOT_FOUND => Ok(None),
             _ => bail!("reading the keychain: {err}"),
         }
@@ -185,7 +178,7 @@ impl SecretStore for SecretTool {
         )?;
         match code {
             // Stored as given (`set` doesn't encode), so returned as is.
-            0 => Ok(Some(strip_newline(out))),
+            0 => Ok(Some(out.trim_end_matches(['\n', '\r']).to_string())),
             1 if err.is_empty() => Ok(None),
             _ => bail!("reading the Secret Service: {err}"),
         }

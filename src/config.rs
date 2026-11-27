@@ -379,6 +379,17 @@ pub fn load_toml<T: Default + DeserializeOwned>(path: &Path) -> Result<T> {
     }
 }
 
+/// Loads a JSON file, or the default when it is missing.
+pub fn load_json<T: Default + DeserializeOwned>(path: &Path) -> Result<T> {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
 /// Saves a TOML config file atomically, writing through a symlink at `path`.
 pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_atomic(
