@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/pelotech/smolbento/compare/nix-kit-v0.3.0...nix-kit-v0.3.1) (2026-11-27)
+
+
+### Docs
+
+* tighten the reference pages ([#303](https://github.com/pelotech/smolbento/issues/303)) ([449d03d](https://github.com/pelotech/smolbento/commit/449d03d9259464f6bb28e956b75b2e816af641e7))
+
 ## [0.3.0](https://github.com/pelotech/smolbento/compare/nix-kit-v0.2.1...nix-kit-v0.3.0) (2026-11-25)
 
 
