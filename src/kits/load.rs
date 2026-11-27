@@ -111,22 +111,25 @@ fn with_logins<R: Runner, T>(
     f(Logins::new(&registries, &*ctx.store))
 }
 
-/// Pulls REF (calling `before` first) unless `pull` lets the cache answer; also returns whether
-/// that added no blob to the cache.
+/// Pulls REF with PULL_KIT (calling `before` first) unless `pull` lets the cache answer, and
+/// refuses under `Pull::Never`; also returns whether that added no blob to the cache.
 fn pull_noting(
     reference: &str,
     pin: Option<&str>,
     cache: &Path,
-    logins: Logins,
     pull: Pull,
     before: &mut dyn FnMut(Fetch),
+    pull_kit: impl FnOnce() -> Result<Kit>,
 ) -> Result<(Kit, bool)> {
     if let Some(kit) = registry::cached(reference, pin, cache, pull)? {
         return Ok((kit, true));
     }
+    if pull == Pull::Never {
+        bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
+    }
     before(Fetch::Pull);
     let blobs = entries(&registry::store_dir(cache));
-    let kit = registry::pull(reference, pin, cache, logins)?;
+    let kit = pull_kit()?;
     Ok((kit, entries(&registry::store_dir(cache)) == blobs))
 }
 
@@ -161,7 +164,10 @@ pub fn fetch<R: Runner>(
                     None
                 };
                 let cache = ctx.paths.kit_cache();
-                pull_noting(&r, verified.as_deref(), &cache, logins, pull, before)
+                let pin = verified.as_deref();
+                pull_noting(&r, pin, &cache, pull, before, || {
+                    registry::pull(&r, pin, &cache, logins)
+                })
             })?,
             Located::V2(dir) => {
                 let spec = dir.join("spec.yaml");
@@ -203,15 +209,12 @@ pub fn agent<R: Runner>(
         let kit = registry::read_layout(Path::new(&reference), source.clone())
             .with_context(|| format!("loading agent kit {reference}"))?;
         (kit, true)
-    } else if let Some(kit) = registry::cached(&reference, pin, &cache, pull)? {
-        (kit, true)
     } else {
-        if pull == Pull::Never {
-            bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
-        }
-        with_logins(ctx, sandbox, |logins| {
-            pull_noting(&reference, pin, &cache, logins, pull, before)
-                .with_context(|| format!("pulling agent kit {reference}"))
+        pull_noting(&reference, pin, &cache, pull, before, || {
+            with_logins(ctx, sandbox, |logins| {
+                registry::pull(&reference, pin, &cache, logins)
+                    .with_context(|| format!("pulling agent kit {reference}"))
+            })
         })?
     };
     kit.source = source;
@@ -286,19 +289,11 @@ pub fn pinned<R: Runner>(
         // tag) answers now. A recorded digest stays authoritative.
         let digest = digest.or(verified.as_deref());
         let cache = ctx.paths.kit_cache();
-        match registry::cached(base, digest, &cache, pull)? {
-            Some(kit) => (kit, true),
-            None if offline => {
-                bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it")
-            }
-            None => {
-                before(Fetch::Pull);
-                let kit = with_logins(ctx, sandbox, |logins| {
-                    registry::pull(base, digest, &cache, logins)
-                })?;
-                (kit, false)
-            }
-        }
+        pull_noting(base, digest, &cache, pull, before, || {
+            with_logins(ctx, sandbox, |logins| {
+                registry::pull(base, digest, &cache, logins)
+            })
+        })?
     };
     kit.reference = Some(base.to_string());
     Ok((kit, cached))
