@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.42.1](https://github.com/pelotech/smolbento/compare/v0.42.0...v0.42.1) (2026-11-27)
+
+
+### Refactors
+
+* **cli:** less boilerplate, shared env flags and helpers ([#309](https://github.com/pelotech/smolbento/issues/309)) ([f66b79c](https://github.com/pelotech/smolbento/commit/f66b79c77e36921984322749cb4ba15c3358989e))
+* **kits:** one kit-fetch path, shared credential conversion, fewer duplicates ([#308](https://github.com/pelotech/smolbento/issues/308)) ([965756e](https://github.com/pelotech/smolbento/commit/965756e91c9ca1174f98f1a2b3e2b527f71783ac))
+* one copy of each security check and shared helpers ([#310](https://github.com/pelotech/smolbento/issues/310)) ([ada74ae](https://github.com/pelotech/smolbento/commit/ada74aed9c59c648156cd2564707ac2f71f75002))
+* simpler start path, fewer labels and smolvm call wrappers ([#307](https://github.com/pelotech/smolbento/issues/307)) ([7ae7c0c](https://github.com/pelotech/smolbento/commit/7ae7c0c8610f6c4c2d989edd9a5c94f0e041b6dc))
+
+
+### Chores
+
+* **deps:** update cachix/install-nix-action action to v32 ([#312](https://github.com/pelotech/smolbento/issues/312)) ([dffd134](https://github.com/pelotech/smolbento/commit/dffd134ddc12b5cd65ea458cb2daf843480ef3d4))
+
 ## [0.42.0](https://github.com/pelotech/smolbento/compare/v0.41.4...v0.42.0) (2026-11-27)
 
 
