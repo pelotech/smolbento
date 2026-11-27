@@ -1,15 +1,8 @@
 # Usage
 
 Everyday tasks: run and create sandboxes, work inside them, and clean up. Examples use `bento`;
-`sbx` (and `sbt`, if you alias it) is the same program. Kits, network policy and environment files
-have their own pages ([index](README.md)).
-
-On this page: [Run an agent](#run-an-agent) · [Create without attaching](#create-without-attaching)
-· [Clone mode](#clone-mode) · [Fork](#fork) · [Run commands inside](#run-commands-inside) · [SSH
-into a sandbox](#ssh-into-a-sandbox) · [Browser and clipboard](#browser-and-clipboard) · [SSH
-agent](#ssh-agent) · [Docker inside a sandbox](#docker-inside-a-sandbox) · [Files and
-ownership](#files-and-ownership) · [Ports](#ports) · [Copy files](#copy-files) · [List](#list) ·
-[Stop, start and remove](#stop-start-and-remove)
+`sbx` is the same program. Kits, network policy and environment files have their own pages
+([index](README.md)).
 
 ## Run an agent
 
@@ -35,7 +28,7 @@ resumes where the agent left off. `create` makes a sandbox that runs until you s
 | `bento run --rm claude` | Delete on exit (kept, with a warning, while another session is attached) |
 | `bento run claude -- -c` | Pass arguments to the agent |
 
-Two directories with the same name (`pelotech/infrastructure` and `uki-code/infrastructure`) would
+Two directories with the same name (`work/infrastructure` and `oss/infrastructure`) would
 get the same default name. Without `--name`, `run` and `create` refuse a name another directory's
 sandbox holds and suggest one with the parent directory
 ([Troubleshooting](troubleshooting.md#sandbox-name-already-used-by-another-workspace)).
@@ -232,27 +225,6 @@ only, and needs `nc` or bash there. SFTP and `scp`, agent forwarding, X11 and re
 (`-R`) are refused; use `bento cp` for files. The config block: [sbx
 compatibility](sbx-compatibility.md#ssh).
 
-### Host services
-
-On macOS (launchd) and Linux (`systemd --user`), a unit per sandbox owns the sockets for the browser,
-clipboard and SSH agent, so they work whenever the sandbox runs, attached or not. The unit runs
-`bento _serve KIND NAME` for each connection. Each connection re-reads settings, so a new `bento`
-binary or `PATH` is picked up when a command rewrites the unit.
-
-- Without a usable service manager (a container, CI without a user session), a socket is served only
-  while `bento run` or `bento exec` is attached. The first attached session serves it.
-- Units are written at create. After a reboot, `create`, `start`, `run` or `exec` load them again.
-  `bento rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets.
-- macOS units live in `~/Library/Application Support/smolbento/launchd`, Linux units in
-  `~/.config/systemd/user`. They exist only for sandboxes with the bridge or an agent grant.
-- The socket directory must be private and yours (0700), checked at create and at start (macOS:
-  `~/Library/Application Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only
-  serving: `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
-- Units of a sandbox deleted with `bento smolvm machine delete` are removed by the next `create`,
-  `start`, `run`, `exec`, `rm` or `prune` (never by `ls`). `prune --dry-run` lists them (`Would
-  remove NAME (leftover host services)`), `prune` removes them without asking, and `diagnose`
-  reports them.
-
 ## Browser and clipboard
 
 ```sh
@@ -306,8 +278,8 @@ locking keys fails.
   none, or with `ssh.agentForwardingEnabled` set to `false`, the sandbox is created without one,
   silently.
 - A [host service](#host-services) owns the agent socket, so the agent answers whenever the sandbox
-  runs, attached or not, across stop and start. Which agent the unit uses:
-  [sbx compatibility](sbx-compatibility.md#ssh-agent). The socket is `0600` in a private directory
+  runs, attached or not, across stop and start (a unit uses launchd's session socket on macOS; on
+  Linux, that of the last `bento` that wrote the unit). The socket is `0600` in a private directory
   of yours.
 - Each connection re-reads settings. `bento settings set ssh.agentForwardingEnabled false` refuses new
   connections at once; open ones stay. A changed `ssh.agentSocketPath` applies to new connections.
@@ -316,6 +288,27 @@ locking keys fails.
 - Forks use the parent's grant while the parent is served.
 
 Limits: a socket path of 104 bytes or more (a very long home directory) disables units.
+
+## Host services
+
+On macOS (launchd) and Linux (`systemd --user`), a unit per sandbox owns the sockets for the browser,
+clipboard and SSH agent, so they work whenever the sandbox runs, attached or not. The unit runs
+`bento _serve KIND NAME` for each connection. Each connection re-reads settings, so a new `bento`
+binary or `PATH` is picked up when a command rewrites the unit.
+
+- Without a usable service manager (a container, CI without a user session), a socket is served only
+  while `bento run` or `bento exec` is attached. The first attached session serves it.
+- Units are written at create. After a reboot, `create`, `start`, `run` or `exec` load them again.
+  `bento rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets.
+- macOS units live in `~/Library/Application Support/smolbento/launchd`, Linux units in
+  `~/.config/systemd/user`. They exist only for sandboxes with the bridge or an agent grant.
+- The socket directory must be private and yours (0700), checked at create and at start (macOS:
+  `~/Library/Application Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only
+  serving: `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
+- Units of a sandbox deleted with `bento smolvm machine delete` are removed by the next `create`,
+  `start`, `run`, `exec`, `rm` or `prune` (never by `ls`). `prune --dry-run` lists them (`Would
+  remove NAME (leftover host services)`), `prune` removes them without asking, and `diagnose`
+  reports them.
 
 ## Docker inside a sandbox
 

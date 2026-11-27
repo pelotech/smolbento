@@ -7,11 +7,20 @@ line of Docker [Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). One b
 ![bento run claude: a network policy prompt, the microVM starting Claude Code, and the agent
 seeing only a placeholder for the API key](https://github.com/pelotech/smolbento/releases/download/demo/demo.gif)
 
-## Why smolbento
+## smolbento and Docker Sandboxes
 
-It keeps the commands and kits of Docker Sandboxes, is open source and needs no account. Each
-command calls smolvm directly. [sbx compatibility](docs/sbx-compatibility.md) lists every command
-and flag.
+smolbento is an independent project. It isn't affiliated with or endorsed by Docker. It exists
+because Docker designed a good command line and published a
+[kit spec](https://github.com/docker/sandbox-kit-spec) for running agents in sandboxes, and
+smolbento follows both. Both run each agent in its own microVM, and neither needs Docker Engine on
+the host. The agents and kits Docker publishes work in either.
+
+Docker Sandboxes is the reference implementation, from the team that designed the command line
+and the kit spec. It also runs on Windows, and offers cloud sandboxes and organization policy.
+smolbento suits you when you want an open-source tool with no account, on macOS or Linux. Each
+command calls smolvm directly; there is no daemon, only per-sandbox helper processes run as
+launchd or `systemd --user` units. [sbx compatibility](docs/sbx-compatibility.md#at-a-glance)
+compares the two and lists every command, flag or kit that behaves differently.
 
 ## How a sandbox is isolated
 
@@ -93,20 +102,6 @@ Set the key first: a sandbox uses the secrets that exist when it's created. The 
 placeholder. Choose a network policy when asked (`balanced` suits most work). When the last
 session ends, the sandbox stops. Run `bento run claude` again to pick up where you left off. See
 [Secrets](docs/network-and-secrets.md#secrets).
-
-## smolbento and Docker Sandboxes
-
-smolbento is an independent project. It isn't affiliated with or endorsed by Docker. It exists
-because Docker designed a good command line and published a
-[kit spec](https://github.com/docker/sandbox-kit-spec) for running agents in sandboxes, and
-smolbento follows both. Both run each agent in its own microVM, and neither needs Docker Engine on
-the host. The agents and kits Docker publishes work in either.
-
-Docker Sandboxes is the reference implementation, from the team that designed the command line
-and the kit spec. It also runs on Windows, and offers cloud sandboxes and organization policy.
-smolbento suits you when you want an open-source tool with no account and no background process, on
-macOS or Linux. [sbx compatibility](docs/sbx-compatibility.md#at-a-glance) compares the two and
-lists every command, flag or kit that behaves differently.
 
 ## Documentation
 

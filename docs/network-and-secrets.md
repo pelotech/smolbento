@@ -82,7 +82,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   mode unless the sandbox has host access, which a `localhost` allow rule gives at create; the check
   says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. Which UDP each egress
-  mode sends: [sbx compatibility](sbx-compatibility.md#network-and-secrets).
+  mode sends: [Hosted egress](#hosted-egress).
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
   sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
   the connection's verdict; `policy ls --wide` shows the request rules.

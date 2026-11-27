@@ -127,8 +127,9 @@ work with it.
 - The socket directory gets the bridge's checks (above): no agent for a start while it isn't
   private, and a kit that requires an agent is refused at create.
 - `ssh.agentForwardingEnabled false` turns it off: new connections are refused at once, and open
-  ones stay. Running `bento` without `SSH_AUTH_SOCK` does too. For a dedicated agent that holds only
-  the keys you want sandboxes to use, set `ssh.agentSocketPath` to its socket.
+  ones stay. A sandbox created while `bento` has no `SSH_AUTH_SOCK` (and no `ssh.agentSocketPath`)
+  gets no agent. For a dedicated agent that holds only the keys you want sandboxes to use, set
+  `ssh.agentSocketPath` to its socket.
 
 ## Network and secrets
 
