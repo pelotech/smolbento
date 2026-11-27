@@ -63,7 +63,7 @@ fn run(program: &str, args: &[&str], input: Option<&str>) -> Result<(i32, String
 }
 
 /// macOS login keychain via `/usr/bin/security`.
-pub struct MacKeychain;
+pub(crate) struct MacKeychain;
 
 const SECURITY: &str = "/usr/bin/security";
 /// `security` exits with this when an item isn't found.
@@ -167,7 +167,7 @@ impl SecretStore for MacKeychain {
 }
 
 /// Linux Secret Service via `secret-tool` (libsecret).
-pub struct SecretTool;
+pub(crate) struct SecretTool;
 
 impl SecretStore for SecretTool {
     fn get(&self, account: &str) -> Result<Option<String>> {
@@ -216,7 +216,7 @@ impl SecretStore for SecretTool {
 }
 
 /// A 0600 TOML file, for machines without a usable keychain (headless Linux, CI).
-pub struct FileStore {
+pub(crate) struct FileStore {
     path: PathBuf,
 }
 

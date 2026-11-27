@@ -34,7 +34,7 @@ fn wanted(set: Option<&str>, debug: bool) -> Option<&str> {
 }
 
 /// The subscriber for a `SMOLBENTO_LOG` of `value`, writing to `writer`; none when unset or empty.
-pub fn subscriber<W>(
+pub(crate) fn subscriber<W>(
     value: Option<&str>,
     writer: W,
 ) -> Option<Result<impl Subscriber + Send + Sync + use<W>, ParseError>>

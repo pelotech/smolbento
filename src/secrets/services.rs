@@ -104,7 +104,7 @@ pub fn unknown(service: &str) -> String {
     )
 }
 
-pub fn builtin_names() -> Vec<&'static str> {
+pub(crate) fn builtin_names() -> Vec<&'static str> {
     BUILTIN.iter().map(|(n, _, _)| *n).collect()
 }
 

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{self, Paths};
 
 pub const INDEX: &str = "templates.json";
-pub const ARCHIVE_META: &str = "smolbento-template.json";
-pub const ARCHIVE_PACK: &str = "template.smolmachine";
+pub(crate) const ARCHIVE_META: &str = "smolbento-template.json";
+pub(crate) const ARCHIVE_PACK: &str = "template.smolmachine";
 
 /// A template name as Docker reads an image ref: `chk-tpl` is `docker.io/library/chk-tpl:latest`.
 #[derive(Debug, Clone, PartialEq, Eq)]

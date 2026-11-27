@@ -123,7 +123,7 @@ pub fn clone(url: &str) -> Result<Checkout> {
 /// The top-level `name:` in a leading `---` YAML block (after an optional BOM): a quoted value's
 /// contents, or a plain value without its ` #` comment, trimmed. None for an empty value or a
 /// block scalar (`|`, `>`), so the directory's name is used.
-pub fn frontmatter_name(text: &str) -> Option<String> {
+pub(crate) fn frontmatter_name(text: &str) -> Option<String> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
     if lines.next()?.trim_end() != "---" {

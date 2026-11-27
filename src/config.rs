@@ -571,7 +571,7 @@ pub(crate) fn test_paths() -> (tempfile::TempDir, Paths) {
     (dir, paths)
 }
 
-pub fn parse_bool(v: &str) -> Result<bool> {
+pub(crate) fn parse_bool(v: &str) -> Result<bool> {
     match v.to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Ok(true),
         "false" | "0" | "no" | "off" => Ok(false),
