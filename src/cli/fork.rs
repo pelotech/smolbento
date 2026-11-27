@@ -38,17 +38,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     }
     // One secrets resolution (one Touch ID) for the parent's start, if needed, and every copy.
     let start = provision::start_plan(ctx, &parent.meta)?;
-    // As `provision::ensure_running` does, with the plan already made.
-    provision::sweep_orphans(ctx);
-    provision::refresh_services(ctx, &parent);
-    let was_stopped = !parent.is_running();
-    if was_stopped {
-        provision::before_start(ctx, &parent);
-    }
-    sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
-    if was_stopped {
-        provision::print_egress_warnings(ctx, parent.name());
-    }
+    provision::start_if_stopped(ctx, &mut parent, || Ok(start.clone()))?;
     for n in &names {
         fork_one(ctx, &parent, n, &start)
             .with_context(|| format!("forking {} as {n}", parent.name()))?;
