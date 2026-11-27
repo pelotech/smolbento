@@ -131,8 +131,34 @@ not listed here.
 
 ## Layout
 
-The code map, module by module, is in [docs/architecture.md](docs/architecture.md#code-map). Shipped
-kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the plus image.
+| Module | Responsibility |
+|---|---|
+| `main.rs` | process entry; `bento` and `sbx` are links to the one binary |
+| `cli` | clap definitions mirroring sbx; handlers |
+| `provision` | create and start: binds policy, secrets and kits to a sandbox; the kit builder |
+| `ctx` | the context every command gets: paths, settings, smolvm, stdio |
+| `smolvm` | `Runner` trait, command builder, JSON types; the pin (`smolvm.lock`), download and locate |
+| `sandbox` | naming, labels, lifecycle, session tracking |
+| `agents` | built-in agent names → sbx's published kits; retired agents |
+| `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |
+| `config` | settings and precedence |
+| `policy` | network rules, presets, compile to smolvm flags |
+| `egress` | hosted egress: the per-sandbox `_serve egress` process that enforces rules and swaps secrets |
+| `util` | leaf helpers: shell quoting, hashing, size parsing |
+| `log` | `SMOLBENTO_LOG` and `-D`: step spans and timings on stderr |
+| `secrets` | sources, stores, resolve at start |
+| `skills` | shared skills store; `--skills` modes; kit skill capabilities |
+| `templates` | saved templates: smolvm packs, index, export archive |
+| `mcp` | registered MCP servers; `--static-mcp`: hosts, credentials and agent config steps |
+| `kits` | kit files: load, resolve, compose the image, apply to a sandbox; registry pulls |
+| `env` | `sbxenv.yaml` environment files |
+| `bridge` | host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
+| `host_service` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets; the orphan sweep |
+| `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
+| `ssh` | `setup ssh` config block; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
+| `crates/egress-front` | workspace member, the only crate on smolvm's `smolvm-credentials` and `smolvm-protocol`; see its README |
+
+Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the plus image.
 
 ## Working
 
@@ -143,6 +169,8 @@ kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for th
 - `crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork. To make a tag
   or fetch the git dependency, see
   [egress-front's smolvm crates](docs/development.md#egress-fronts-smolvm-crates).
+  A smolvm bump doesn't need a new tag; one that egress-front needs newer smolvm-credentials code
+  for does (update the crate's `tag` and the flake hash).
 - **Testing: fastest check first, each long run once.**
   - While iterating, run only the tests for what you changed: `direnv exec . cargo nextest run --lib
     <module or test name>`, or one group of e2e tests with `just e2e 2 <name filter>` (for example
