@@ -231,6 +231,7 @@ fn no_policy_and_no_terminal_is_an_error() {
 #[test]
 fn push_updates_running_sandboxes_only() {
     let t = deny_all_env();
+    let setup = crate::host_service::namespace(&t.ctx.paths);
     let ls = format!(
         "[{},{}]",
         machine_json(
@@ -238,7 +239,8 @@ fn push_updates_running_sandboxes_only() {
             "running",
             &[
                 ("sbx.name", "a1"),
-                ("sbx.credential-hosts", "api.x.example")
+                ("sbx.credential-hosts", "api.x.example"),
+                ("sbx.setup", &setup),
             ]
         ),
         machine_json("sbx-b1", "stopped", &[("sbx.name", "b1")]),
@@ -252,6 +254,7 @@ fn push_updates_running_sandboxes_only() {
             &[
                 ("sbx.name", "a1"),
                 ("sbx.credential-hosts", "api.x.example"),
+                ("sbx.setup", &setup),
             ],
         ),
     );
@@ -561,7 +564,12 @@ fn the_first_start_keeps_its_install_rules() {
 fn a_policy_push_during_install_keeps_the_install_rules() {
     let t = deny_all_env();
     leftover_install_rule(&t);
-    let running = machine_json("sbx-s1", "running", &[("sbx.name", "s1")]);
+    let setup = crate::host_service::namespace(&t.ctx.paths);
+    let running = machine_json(
+        "sbx-s1",
+        "running",
+        &[("sbx.name", "s1"), ("sbx.setup", &setup)],
+    );
     t.runner()
         .ok(&["machine", "ls", "--json"], &format!("[{running}]"));
     t.runner()

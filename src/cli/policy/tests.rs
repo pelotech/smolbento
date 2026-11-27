@@ -469,13 +469,11 @@ fn policy_changes_reach_only_this_setups_sandboxes() {
     let ours = crate::host_service::namespace(&t.ctx.paths);
     t.sandboxes(&[
         ("mine", "running", &[("sbx.setup", ours.as_str())]),
-        ("legacy", "running", &[]),
         ("theirs", "running", &[("sbx.setup", "00000000")]),
     ]);
     t.sbt(&["policy", "allow", "network", "api.x.com"]).unwrap();
     let u = updates(&t);
     assert!(u.iter().any(|l| l.contains("-n sbx-mine")), "{u:?}");
-    assert!(u.iter().any(|l| l.contains("-n sbx-legacy")), "{u:?}");
     assert!(!u.iter().any(|l| l.contains("-n sbx-theirs")), "{u:?}");
     t.sbt(&["policy", "reset", "-f"]).unwrap();
     let calls = t.calls();

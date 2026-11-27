@@ -153,10 +153,23 @@ impl TestEnv {
     }
 
     /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`. It
-    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one.
+    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one, and
+    /// belongs to this setup unless they give an `sbx.setup`.
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
-        self.runner()
-            .ok(&["machine", "status"], &sandbox_json(name, state, labels))
+        self.runner().ok(
+            &["machine", "status"],
+            &self.sandbox_json(name, state, labels),
+        )
+    }
+
+    /// [`sandbox_json`], in this setup unless `labels` give an `sbx.setup`.
+    fn sandbox_json(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> String {
+        let setup = crate::host_service::namespace(&self.ctx.paths);
+        let mut all = labels.to_vec();
+        if !labels.iter().any(|(k, _)| *k == "sbx.setup") {
+            all.push(("sbx.setup", &setup));
+        }
+        sandbox_json(name, state, &all)
     }
 
     /// Makes `machine ls` list these (name, state, labels) sandboxes and `machine status -n` answer
@@ -164,7 +177,7 @@ impl TestEnv {
     pub fn sandboxes(&self, list: &[Listed]) -> &FakeRunner {
         let jsons: Vec<String> = list
             .iter()
-            .map(|(name, state, labels)| sandbox_json(name, state, labels))
+            .map(|(name, state, labels)| self.sandbox_json(name, state, labels))
             .collect();
         let fake = self.runner();
         fake.ok(

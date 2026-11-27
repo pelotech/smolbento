@@ -118,7 +118,7 @@ impl Sandbox {
 
     /// Whether this setup's policy applies to it (`labels::SETUP`).
     pub fn in_setup(&self, paths: &crate::config::Paths) -> bool {
-        (self.meta.setup.as_deref()).is_none_or(|s| s == crate::host_service::namespace(paths))
+        self.meta.setup.as_deref() == Some(crate::host_service::namespace(paths).as_str())
     }
 
     /// The primary workspace, else the workload image's WORKDIR, else sbx's mountless directory.

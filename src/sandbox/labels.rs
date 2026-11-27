@@ -279,7 +279,7 @@ pub struct Meta {
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
-    /// `sbx.setup`; `None` on an unlabelled (older) sandbox, which every setup treats as its own.
+    /// `sbx.setup`: the setup (`host_service::namespace`) whose policy applies to it.
     pub setup: Option<String>,
     /// Created with the bridge socket mounted: starts install the guest shims (`sbx.bridge`).
     pub bridge: bool,

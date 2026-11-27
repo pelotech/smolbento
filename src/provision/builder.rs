@@ -258,6 +258,7 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         cpus: options::host_cpus(),
         memory_mib: MEMORY_MIB,
         created: ctx.now,
+        setup: Some(crate::host_service::namespace(&ctx.paths)),
         ..Default::default()
     }
 }
