@@ -172,18 +172,7 @@ pub fn cached(
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
 pub fn pull_image(reference: &str, cache: &Path, logins: Logins) -> Result<PathBuf> {
-    pull_layout(reference, cache, false, logins)
-}
-
-/// Downloads REF into an OCI layout under the cache and returns its directory. With
-/// `require_kit` the kit annotation is checked before any layer is fetched.
-fn pull_layout(
-    reference: &str,
-    cache: &Path,
-    require_kit: bool,
-    logins: Logins,
-) -> Result<PathBuf> {
-    let fetched = fetch_ref(reference, cache, require_kit, true, logins)?;
+    let fetched = fetch_ref(reference, cache, false, true, logins)?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
 }
 

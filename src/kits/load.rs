@@ -60,14 +60,11 @@ pub fn builtin(reference: &str) -> Option<Result<Kit>> {
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
 /// or pulled. Built-in agent names are `agent`'s business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
-pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
-    load_with(ctx, reference, false)
-}
-
-/// `load`, optionally offline (`kit inspect|validate --offline`): like sbx, the source policy
-/// isn't checked, and only what needs no network loads (a local v2 kit or Smolfile). A registry
-/// reference would be pulled and a v3 source directory built (the builder pulls its base image),
-/// so both are refused.
+///
+/// `offline` (`kit inspect|validate --offline`): like sbx, the source policy isn't checked, and
+/// only what needs no network loads (a local v2 kit or Smolfile). A registry reference would be
+/// pulled and a v3 source directory built (the builder pulls its base image), so both are
+/// refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
     let pull = Pull::offline(offline);
     Ok(fetch(ctx, reference, pull, None, Position::Kit, &mut |_| {})?.0)
@@ -304,7 +301,7 @@ fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())
 }
 
-/// The name `load` gives the kit REF names where the agent goes (the sandbox is named after it),
+/// The name `load_with` gives the kit REF names where the agent goes (the sandbox is named after it),
 /// without pulling or building it: trust is checked, then the name comes from the source (or a
 /// v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
@@ -556,6 +553,10 @@ pub fn check_launchable<R: Runner>(
 mod tests {
     use super::*;
     use crate::testutil::*;
+
+    fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+        load_with(ctx, reference, false)
+    }
 
     fn allow_local() -> TestEnv {
         test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])

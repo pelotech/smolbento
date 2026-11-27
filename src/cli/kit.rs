@@ -520,7 +520,7 @@ fn add<R: Runner>(
 ) -> Result<i32> {
     let values = args.values()?;
     let mut sb = sandbox::get(&ctx.vm, name)?;
-    let kit = load::load(ctx, reference)?;
+    let kit = load::load_with(ctx, reference, false)?;
     if kit.kind != Kind::Mixin {
         bail!("{reference} is a workload kit, not a mixin; only mixins can be added to a sandbox");
     }
