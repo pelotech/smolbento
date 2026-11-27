@@ -1,5 +1,7 @@
 # Troubleshooting
 
+Error messages and symptoms, each with its cause and fix.
+
 Start with `bento diagnose`. Add `-D` to any command to print the smolvm commands it runs and turn
 on the log below at `info`, for example `bento -D run claude`. `bento diagnose --format github-issue`
 prints the checks as Markdown to paste into an issue. It includes paths on your machine, so read it
@@ -126,6 +128,76 @@ If the error persists, read the daemon log:
 ```sh
 bento exec --privileged NAME cat /var/log/dockerd.log
 ```
+
+## `sandbox name … is already used by workspace …`
+
+Cause: the default name, `<agent>-<directory name>`, belongs to another directory's sandbox (two
+directories with the same name). The error suggests a name with the parent directory:
+
+```console
+$ bento run claude
+error: sandbox name "claude-infrastructure" is already used by workspace "/src/pelotech/infrastructure"; pass --name to choose a different name, such as --name claude-uki-code-infrastructure
+```
+
+Pass `--name`, or set `sandbox.autoName` to take the suggested name
+([Usage](usage.md#run-an-agent)).
+
+## `502` from a secret's or registry's host
+
+Cause, on a hosted sandbox: a `--ref` or `--command` secret needs a variable from your shell, and
+the egress process doesn't get it ([Hosted egress](network-and-secrets.md#hosted-egress)). The
+egress process lists the secrets it couldn't resolve, and `bento create` and `start` warn about each
+once the sandbox is up, if the process has got that far. Use a source that doesn't need the shell's
+variables (a stored value, a command that reads a file), or create the sandbox with
+`network.egress=smolvm`, where secrets resolve in the shell that starts it.
+
+Cause, in a local kit build: `502 credential unavailable` means the build reached a logged-in
+registry without naming it as `HOST/<repo>` in its descriptor. Write the image as `HOST/<repo>`, or
+remove the login (`bento secret rm --registry HOST`).
+
+## Connections reset
+
+Cause: a hosted sandbox's egress process denied the connection. The guest sees it open, then reset,
+not refused: curl exits 35 or 56 (52 for plain HTTP), not 7. Its `egress.log`
+([Hosted egress](network-and-secrets.md#hosted-egress)) has each denied connection with its reason
+(`deny gist.github.com:443: …`). Plain HTTP to a host with request rules is logged as `plain HTTP to
+a host with request rules`: use HTTPS.
+
+## `403` from a hosted sandbox
+
+Cause: a [request rule](network-and-secrets.md#request-rules) refused the request. The body names
+the deny rule (`… (rule r-1a2b3c4d)`; `bento policy ls --wide` shows rule IDs), or, on a host that
+only bounded allows admit, says `no rule allows POST /post on httpbin.org`. A path the egress
+process can't judge is refused as `ambiguous request target`.
+
+## `recreate required`
+
+Cause: `bento kit add` of a kit that changes what a sandbox fixes at create
+([Kits](kits.md#adding-a-kit-to-a-sandbox)). Nothing was changed. Create a new sandbox with the kit.
+
+## `needs an SSH agent, but SSH_AUTH_SOCK is unset`
+
+The full message is `kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is
+unset`. Cause: the kit requires your SSH agent and none was found. Run `bento` with `SSH_AUTH_SOCK`
+set, or set `ssh.agentSocketPath` ([Usage](usage.md#ssh-agent)).
+
+## `clone skills repository: exit status N`
+
+Cause: `bento skills add` couldn't clone the repository with your host `git`, which never prompts.
+For a private repository, set up a credential helper or SSH agent first.
+
+## `bundled skills … cannot be exposed in …`
+
+The full message is `failed to compose shared skills into the sandbox: bundled skills NAME cannot be
+exposed in DIR: another skill already uses the name`. Cause: a kit's required bundled skill has the
+name of a skill in your store ([Skills from kits](kits.md#skills-from-kits)). The create stops
+before the sandbox is made.
+
+## `failed to write host clipboard`
+
+The full message is `<command>: failed to write host clipboard (copying may be off: …)`. Cause:
+copying is off, or nothing serves the clipboard socket. Turn copying on with `bento settings set
+clipboard.textCopy true`; see [Host services](usage.md#host-services) for when the socket is served.
 
 ## A sandbox won't go away, or `already exists`
 

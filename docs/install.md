@@ -1,5 +1,7 @@
 # Install
 
+Install, upgrade and remove smolbento, and check your setup.
+
 ## Requirements
 
 - macOS on Apple Silicon, or Linux (x86_64 or arm64) with KVM. Windows is planned.
@@ -46,9 +48,9 @@ only, `nix build` produces the same names in `result/bin/`.
 
 ## Install a release
 
-Release tarballs for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and
-`aarch64-unknown-linux-gnu` are attached to each GitHub release. Each one is signed with a Sigstore
-bundle (`.sigstore.json`). Verify it, unpack it, and put the directory on your `PATH`:
+Each GitHub release has tarballs for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`, each signed with a Sigstore bundle (`.sigstore.json`). Verify one,
+unpack it, and put the directory on your `PATH`:
 
 ```sh
 TARGET=aarch64-apple-darwin
@@ -59,7 +61,8 @@ cosign verify-blob --bundle "smolbento-$TARGET.tar.gz.sigstore.json" \
 tar xzf "smolbento-$TARGET.tar.gz"
 ```
 
-Linux binaries need glibc 2.28 or newer. On macOS, `brew install e2fsprogs` for disks over 20 GiB.
+Limits: Linux binaries need glibc 2.28 or newer. On macOS, `brew install e2fsprogs` for disks over
+20 GiB.
 
 ## Upgrading
 
@@ -97,8 +100,8 @@ bento diagnose
 ```
 
 Every line should start with `ok`. It checks the smolvm smolbento runs, hypervisor access
-(`/dev/kvm` on Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line says `FAIL`, see
-[Troubleshooting](troubleshooting.md).
+(`/dev/kvm` on Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line
+says `FAIL`, see [Troubleshooting](troubleshooting.md).
 
 ## Shell completions
 
