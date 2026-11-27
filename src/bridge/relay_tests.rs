@@ -17,6 +17,8 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::sandbox::options::{free_port, free_ports};
+
 type Calls = Arc<Mutex<Vec<Vec<String>>>>;
 
 /// A fake smolvm that records its argv and answers with `out`.
@@ -272,15 +274,6 @@ fn refuses_odd_requests_without_running_anything() {
     assert!(calls.lock().unwrap().is_empty());
 }
 
-/// A port nothing listens on just now.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 fn get(port: u16, raw: &str) -> String {
     let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -294,7 +287,7 @@ fn get(port: u16, raw: &str) -> String {
 fn relays_a_browsers_request_until_dropped() {
     let (exec, calls) = fake(answered("HTTP/1.1 200 OK\r\n\r\nyou can close this tab"));
     let mut relays = Relays::new(exec, "sbx-m", "agent");
-    let port = free_port();
+    let port = free_port().unwrap();
     assert_eq!(relays.start(port), None);
     // Started once: a second start is a no-op.
     assert_eq!(relays.start(port), None);
@@ -363,11 +356,7 @@ fn a_port_served_on_every_address_is_taken() {
 fn a_session_starts_at_most_four_relays_and_warns_once() {
     let (exec, _) = fake(answered(""));
     let mut relays = Relays::new(exec, "sbx-m", "agent");
-    let mut ports = BTreeSet::new();
-    while ports.len() < 6 {
-        ports.insert(free_port());
-    }
-    let ports: Vec<u16> = ports.into_iter().collect();
+    let ports = free_ports(6).unwrap();
     for &p in &ports[..4] {
         assert_eq!(relays.start(p), None);
     }
@@ -400,9 +389,9 @@ fn lingering_relays_hold_one_of_the_sandboxs_slots() {
         r
     };
     let mut first = lingering(Duration::from_millis(300));
-    assert_eq!(first.start(free_port()), None);
+    assert_eq!(first.start(free_port().unwrap()), None);
     let mut second = lingering(Duration::from_millis(300));
-    let port = free_port();
+    let port = free_port().unwrap();
     assert_eq!(
         second.start(port).as_deref(),
         Some(
@@ -416,7 +405,7 @@ fn lingering_relays_hold_one_of_the_sandboxs_slots() {
     assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
     // Once the first's relays have run out, its slot is free.
     drop(first);
-    assert_eq!(second.start(free_port()), None);
+    assert_eq!(second.start(free_port().unwrap()), None);
 }
 
 #[test]
@@ -424,7 +413,7 @@ fn a_relay_closes_after_its_lifetime() {
     let (exec, _) = fake(answered(""));
     let mut relays = Relays::new(exec, "sbx-m", "agent");
     relays.lifetime = Duration::from_millis(200);
-    let port = free_port();
+    let port = free_port().unwrap();
     assert_eq!(relays.start(port), None);
     assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok());
     let until = Instant::now() + Duration::from_secs(5);
@@ -441,7 +430,7 @@ fn a_relay_closes_after_its_lifetime() {
 fn a_slow_browser_is_cut_off_and_drop_is_prompt() {
     let (exec, _) = fake(answered("HTTP/1.1 200 OK\r\n\r\n"));
     let mut relays = Relays::new(exec, "sbx-m", "agent");
-    let port = free_port();
+    let port = free_port().unwrap();
     assert_eq!(relays.start(port), None);
     // A half-sent request, then the session ends.
     let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
