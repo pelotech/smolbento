@@ -134,7 +134,7 @@ Uncommitted changes aren't carried over.
 Remotes are copied on every start, except local-path and `file://` ones, and HTTPS user names and
 tokens are left out. SSH remotes have no keys in the sandbox, so push over HTTPS with `bento secret
 set github`. A remote the agent changed is reset to your URL. The agent can still read your whole
-`.git`, so keep credentials out of it ([Security](SECURITY.md#other-things-to-know)).
+`.git`, so keep credentials out of it ([Security](SECURITY.md#workspaces-clones-and-forks)).
 
 - `run` fetches `sandbox-<name>` on exit and prints git's summary. Turn it off with `bento settings
   set clone.fetch-on-exit false`. A failed fetch only warns. The automatic fetch checks objects

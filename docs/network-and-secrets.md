@@ -67,7 +67,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
 - Ports (`host.example.com:8080`) are enforced for hosted sandboxes, in allows and denies;
   `policy check` without a port checks 443. smolvm can't filter by port, so with
   `network.egress=smolvm` deny the host without a port ([sbx
-  compatibility](sbx-compatibility.md#differences-youll-notice)). `policy ls --wide` says in STATUS
+  compatibility](sbx-compatibility.md#network-and-secrets)). `policy ls --wide` says in STATUS
   which rules smolvm doesn't fully enforce.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
@@ -82,7 +82,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   mode unless the sandbox has host access, which a `localhost` allow rule gives at create; the check
   says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. Which UDP each egress
-  mode sends: [sbx compatibility](sbx-compatibility.md#differences-youll-notice).
+  mode sends: [sbx compatibility](sbx-compatibility.md#network-and-secrets).
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
   sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
   the connection's verdict; `policy ls --wide` shows the request rules.

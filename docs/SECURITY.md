@@ -10,12 +10,17 @@ engine stay off your machine. The agent reaches your machine only through:
 - the network.
 
 In every policy mode, sandboxes can't reach your machine's localhost (`127.0.0.1` or `::1`) unless
-you add a `localhost` rule.
+you add a `localhost` rule. Inside the VM:
+
+- The agent runs with permission prompts disabled, so the VM is the only boundary.
+- `bento exec --privileged` and the sandbox's Docker engine run as root inside the VM.
+- smolbento refuses to run as root on the host, because smolvm doesn't map a root-owned workspace
+  to the agent user.
 
 ### Host services (`localhost` rules)
 
-`bento policy allow network [--sandbox NAME] localhost[:PORT]` lets sandboxes reach your localhost as
-`host.docker.internal`. A hosted sandbox (the default, see [Hosted
+A `localhost` rule ([Host services](network-and-secrets.md#host-services)) lets sandboxes reach
+your localhost as `host.docker.internal`. A hosted sandbox (the default, see [Hosted
 egress](network-and-secrets.md#hosted-egress)) reaches only the ports the rules name: its egress
 process judges every connection to the gateway as `localhost:<port>`. smolvm can't open a single
 host port yet, so for a sandbox created with `network.egress=smolvm` a rule opens more than it
@@ -39,6 +44,92 @@ names:
 Under `allow-all`, a sandbox can reach your LAN IP, so a service listening on `0.0.0.0` is
 reachable. `balanced` and `deny-all` block that unless you allow the address.
 
+## Workspaces, clones and forks
+
+- Workspaces are mounted read-write by default. Anything the agent writes, including git hooks or
+  config in a mounted repo, lands on your machine. With `--clone`, the agent can't write to your
+  repo. Only commits come back, on `git fetch sandbox-<name>` (not tags). Review them before you
+  merge, and check fetched objects with `git -c fetch.fsckObjects=true fetch`.
+- smolvm maps only a mounted directory's owner and group to the agent. A subdirectory owned by
+  another of your groups keeps that group, so the agent can't write it through the group.
+- With `--clone`, the agent can read your repo's whole `.git`, including `.git/config`, as in sbx.
+  A user name and token in an HTTPS remote URL are left out of the clone's own remotes, but they
+  stay in that file, and so does any `http.extraHeader`. Keep credentials out of repo config. Use
+  a credential helper or `bento secret`. `create --clone` warns about remote URLs with a token.
+- Forkable sandboxes (clone and mountless, not forks) start branchable. On Linux this drops smolvm's
+  no-ptrace hardening of the VM process, so other processes running as you can read its memory,
+  including secret values. On every platform, smolvm stops returning their idle memory. Turn it off
+  with `bento settings set fork.enabled false`, from each sandbox's next start.
+
+## SSH
+
+`ssh NAME.sbx` ([SSH into a sandbox](usage.md#ssh-into-a-sandbox)) runs `bento ssh proxy` as a child
+of `ssh`, on a pipe: no listener, no key, no password. It accepts the `none` method only and nothing
+else, so only the user who runs `ssh` reaches it, and it can do what `bento exec` does. It turns
+down SFTP, agent forwarding, X11 and remote forwarding. `-L` forwards reach only the sandbox's own
+loopback (`localhost`, `127.0.0.0/8`, `::1`), never the host or another address. The host key is new
+for each connection and not checked, since nothing sits between `ssh` and its child. Session data is
+not logged. A sandbox's processes can see what you send through a forward, as with any `exec`.
+
+## Host service units, browser and clipboard
+
+- While the sandbox runs ([Browser and clipboard](usage.md#browser-and-clipboard)), it can open
+  `https://` URLs in your browser and overwrite your clipboard, but it can't read the clipboard. A
+  malicious page opened this way runs in your real browser, with your logins. `browser.enabled
+  false` turns off URL opening. Clipboard text may be crafted to run commands when pasted, so check
+  it first.
+- [Host service](usage.md#host-services) units: per sandbox with a bridge or a runtime SSH agent
+  grant, smolbento writes a launchd user agent or `systemd --user` socket and service units. They
+  run as you, never as root, listen on a `0600` socket and start `bento _serve KIND SANDBOX` for
+  each connection, with the connection as stdin and stdout and stderr on `/dev/null`. `_serve` is
+  the filter and bridge handler, and reads the grant from the sandbox's labels; the unit carries
+  your `PATH`, `HOME`, `SMOLBENTO_*` variables and, on Linux, `SSH_AUTH_SOCK`, never secrets. Anyone
+  who can write your unit files or your `PATH` can run commands as you, as with any launch agent.
+  Names carry a hash of the data dir, so separate setups don't touch each other's units.
+- The socket directory ([Files](configuration.md#files)) is checked at create and at each start: a
+  real directory (not a symlink), owned by you, with mode 0700, created that way if missing. If the
+  check fails, the sandbox gets no bridge for that start, with a warning. This stops another user
+  from receiving what the sandbox sends by creating the directory first.
+- Forks don't install bridge shims or get units, but they keep the parent's socket mount. While the
+  parent is served, a process in a fork can open URLs, copy and use the SSH agent through the
+  parent's sockets.
+- OAuth callback ports. For an opened URL whose `redirect_uri` is `http://localhost:PORT` or
+  `http://127.0.0.1:PORT`, smolbento listens on your `127.0.0.1:PORT` (never other interfaces) for
+  10 minutes (or until the session ends, in attached-only serving). It opens at most 4 ports a
+  session, and not if something already answers on `localhost:PORT`. It passes requests whose `Host`
+  is `localhost:PORT` or `127.0.0.1:PORT` into the sandbox. Known gaps:
+  - Other local programs can reach that port while it's open, as they could reach an agent's
+    callback server on your machine.
+  - The sandbox can claim that port before a service of yours starts on it.
+  - Pages the sandbox serves there are on `localhost`, whose cookies aren't separated by port. They
+    can read and set the cookies of your other `localhost` apps.
+  - Each replay is cut off after 15 seconds or 1 MiB of response.
+  - `browser.enabled false` also turns the relay off.
+
+## SSH agent
+
+Built-in agents, and kits that ask with `ssh-agent@1`, can use your SSH agent whenever the sandbox
+runs ([SSH agent](usage.md#ssh-agent)), and during a kit's `install` grant. While the agent is
+served, code in the sandbox can sign as you and log in wherever your keys work. Don't run untrusted
+work with it.
+
+- They can list your agent's public keys and have it sign with any of them. That covers git commit
+  signatures and SSH logins to any server your keys open.
+- A kit's `sign: [...]` list allows only signatures in those namespaces, not logins.
+- An `authenticate: [...]` list allows logins only to those servers: smolbento verifies the session
+  binding the client sends, and signs only when the binding's host key is one your
+  `ssh.knownHostsFile` (default `~/.ssh/known_hosts`) lists for a named server; anything else is
+  refused without reaching your agent. A server known only through a `@cert-authority` line, or by
+  a wildcard or negated pattern, isn't trusted for this. A kit without `authenticate` can't log in
+  at all.
+- They can't add, remove or lock keys or do anything else; smolbento answers those requests itself
+  with a failure. Your private keys never enter the sandbox.
+- The socket directory gets the bridge's checks (above): no agent for a start while it isn't
+  private, and a kit that requires an agent is refused at create.
+- `ssh.agentForwardingEnabled false` turns it off: new connections are refused at once, and open
+  ones stay. Running `bento` without `SSH_AUTH_SOCK` does too. For a dedicated agent that holds only
+  the keys you want sandboxes to use, set `ssh.agentSocketPath` to its socket.
+
 ## Network and secrets
 
 - Use `balanced` or `deny-all` for untrusted work. Sandboxes created before you chose a policy stay
@@ -59,9 +150,9 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
   CIDR allow rule (or `allow-all`). Protocols where the server speaks first (SMTP, FTP) don't work:
   smolvm's interceptor waits up to 10 s for the client's first bytes, then closes the connection.
 
-  With `network.egress=smolvm`, host rules are
-  looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't
-  enforced, and method, path and query rules aren't enforced. See [sbx compatibility](sbx-compatibility.md).
+  With `network.egress=smolvm`, host rules are looser than sbx's: `*.x.com` matches any depth,
+  wildcards inside a label widen, and ports aren't enforced, and method, path and query rules
+  aren't enforced. See [sbx compatibility](sbx-compatibility.md#network-and-secrets).
 
   Hosted sandboxes enforce method, path and query rules per request on the hosts they name, and the
   same name spoofing gets past them: see [Request rules](network-and-secrets.md#request-rules).
@@ -84,38 +175,34 @@ kits you trust.
   without a `kit.allowedSources` check, like a Dockerfile's `FROM`.
 - Registry transport is HTTPS, except for loopback registries (`localhost`, `127.0.0.0/8`,
   `::1`), which use plain HTTP, as in Docker.
-- Kit network rules apply to their sandbox only, even under `deny-all`. `bento policy ls --source kit`
-  lists them, one `kit:NAME` policy per sandbox. Deny rules always win: to block a host a kit allows,
-  run `bento policy deny network --sandbox NAME HOST`.
+- Kit network rules apply to their sandbox only, even under `deny-all`. `policy ls --source kit`
+  lists them. Deny rules always win, so a sandbox deny rule blocks a host a kit allows.
 - Install-only rules apply while they're in the policy: from create (or `kit add`) through the
-  install steps, then go, before the workload's entrypoint starts. `policy ls` lists them only
-  then. A start removes any an interrupted create or `kit add` left, and `bento rm` or the next
-  create of that name removes an interrupted create's. A CIDR deny made
-  during install stays for the sandbox's life, because smolvm takes CIDR denies only at create.
-- `kit add` asks before opening new network access on an existing sandbox. `-y` grants it. Without
-  a terminal it fails.
+  install steps, then go, before the workload's entrypoint starts. `policy ls` lists them only then.
+  A start removes any an interrupted create or `kit add` left, and `bento rm` or the next create of
+  that name removes an interrupted create's. A CIDR deny made during install stays for the sandbox's
+  life, because smolvm takes CIDR denies only at create.
+- `kit add` asks before opening new network access on an existing sandbox
+  ([Adding a kit](kits.md#adding-a-kit-to-a-sandbox)).
 - Kit credentials are your secrets as placeholders. A value goes only to the hosts the kit names,
   or to the service's own hosts if it names none.
   - A **built-in** service's secret (`github`, `anthropic`, ...) goes only to that service's own
     hosts. Naming another host fails: "kit K wants to send your github secret to HOST, which github
     doesn't use; refusing". sbx asks you to approve the kit's hosts instead; smolbento adds this
     check because Docker Hub kits load by default.
-  - A **custom** service's secret (`bento secret set-custom`) goes to any host the kit names. `create`
-    and `kit add` print "kit K sends your SERVICE secret to HOSTS".
-  - `bento kit inspect REF` lists each credential's service and hosts under `Credentials:`
-    (`credentials` in `--format json`).
+  - A **custom** service's secret (`bento secret set-custom`) goes to any host the kit names.
+    `create` and `kit add` print "kit K sends your SERVICE secret to HOSTS".
+  - `bento kit inspect REF` lists each credential's service and hosts.
   - A credential's hosts are always reachable, and a deny rule can't block them while the kit's
     binding exists. That binding lasts the sandbox's life, because smolvm needs those hosts to send
     the secret. Recreate the sandbox without the kit to drop it.
-  - A required credential with no secret set stops create, naming the secret to set. An optional one
-    is skipped, and requests go out without it.
-  - A credential needed only while installing is gone after install.
-- Install steps run as root. A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`,
-  `TERM`, the proxy and CA variables, and the variables it declares). Startup and v2 steps get the
-  whole sandbox environment, including secret variables, which hold placeholders. A failing startup
-  step stops the sandbox from starting until it's fixed.
-- A workload kit's agent runs as the image's `USER`, or as root if there is none, as sbx does.
-  smolvm maps your workspace to that user so it can write it.
+  - An optional credential with no secret set is skipped, and requests go out without it. A
+    credential needed only while installing is gone after install.
+- Install steps run as root. Startup and v2 steps get the whole sandbox environment, including
+  secret variables, which hold placeholders ([Kits](kits.md#kits) has each step's environment). A
+  failing startup step stops the sandbox from starting until it's fixed.
+- A workload kit's agent runs as the image's `USER`, or as root if there is none, and can write
+  your workspace.
 - Kit host mounts (`host-mount@1`) are directories on your machine. Writes land on your disk,
   outside the VM. Every other sandbox of the same kit reads them, even after this sandbox is
   removed, and so do later versions of a published kit (keyed by repository). Don't share one
@@ -123,14 +210,41 @@ kits you trust.
   directory you give it and everything below it.
 - Kit arguments aren't secret. Their values can reach the sandbox's environment and smolvm's machine
   config. Put secrets in credentials, not `--kit-arg`.
-- Local kit builds run in the `_builder` sandbox, a VM under your global network policy, not on
-  your Docker. The builder never gets your secrets.
+- Local kit builds run in the [`_builder` sandbox](kits.md#the-builder-sandbox), a VM under your
+  global network policy, not on your Docker. The builder never gets your secrets.
 - Registry credentials (`bento secret set --registry`) stay on your machine and go only to their
   registry ([details](network-and-secrets.md#registry-credentials)). A local build gets a pull token
   instead, which the guest sees only as a placeholder. Every registry you stored a login for is
   reachable from the builder, even under `deny-all`, because sbx's host build isn't bound by policy
-  either. A build step can use the token until it expires (a few minutes). Some registries (`dhi.io`)
-  honour it for repositories outside its scope.
+  either. A build step can use the token until it expires (a few minutes). Some registries
+  (`dhi.io`) honour it for repositories outside its scope.
+
+## Skills
+
+The shared skills store is agent material. smolbento never runs it, and reads nothing in it beyond
+directory names. What you share with a sandbox is what its agent follows.
+
+- A `readwrite` sandbox can change the skills other sandboxes load. Its agent writes straight into
+  your store, so a changed or added skill is linked into every later sandbox, `readonly` ones
+  included. Use it only for work you trust.
+- `readonly` doesn't isolate a sandbox from changes. The agent can't edit a stored skill, but it
+  loads whatever the store holds at each start, including changes made by a `readwrite` sandbox or
+  by you.
+- Use `--skills off` for untrusted work. The sandbox gets no store and no skills directory.
+- A kit can widen `readwrite` to links. With `--skills readwrite`, a kit that names a `readwrite`
+  directory makes `/run/sbx/skills-shared` read-write. The agent can then
+  change stored skills through every link. Check a kit's `agent-skills@1` modes before using it
+  with `readwrite`.
+- Prefer HTTPS or SSH for `skills add`. `http://` and `git://` URLs are accepted, as in sbx, but
+  their content can change in transit.
+- Linking runs as root in the guest. It creates the skills directory and links in it,
+  and changes the owner of those alone. It refuses a skills directory whose path goes through a
+  symlink anywhere, including a parent such as `~/.claude`, and checks before and after creating
+  the directory so the agent can't redirect it. Image symlinks such as `/home -> /var/home` count
+  too, so such a sandbox gets no skills links.
+- Bundled kit skills are image content. An `agent-skill@1` skill comes from the kit's image, and
+  smolbento only links it. The agent reads its instructions like any skill's, so trust the kit as
+  you would for its install hooks.
 
 ## MCP servers
 
@@ -175,117 +289,6 @@ kits you trust.
   temporary directory, so it can't pick up a script from the current directory
   ([details](network-and-secrets.md#secrets)).
 - A failed `env create` leaves the secrets it stored. `env rm` with the same files removes them.
-
-## Other things to know
-
-- `ssh NAME.sbx` (after `bento setup ssh`) runs `bento ssh proxy` as a child of `ssh`, on a pipe:
-  no listener, no key, no password. It accepts the `none` method only and nothing else, so only the
-  user who runs `ssh` reaches it, and it can do what `bento exec` does. It turns down SFTP, agent
-  forwarding, X11 and remote forwarding. `-L` forwards reach only the sandbox's own loopback
-  (`localhost`, `127.0.0.0/8`, `::1`), never the host or another address. The host key is new for each
-  connection and not checked, since nothing sits between `ssh` and its child. Session data is not
-  logged. A sandbox's processes can see what you send through a forward, as with any `exec`.
-- The agent runs with permission prompts disabled, so the VM is the only boundary.
-- Workspaces are mounted read-write by default. Anything the agent writes, including git hooks or
-  config in a mounted repo, lands on your machine. With `--clone`, the agent can't write to your
-  repo. Only commits come back, on `git fetch sandbox-<name>` (not tags). Review them before you
-  merge, and check fetched objects with `git -c fetch.fsckObjects=true fetch`.
-- smolvm maps only a mounted directory's owner and group to the agent. A subdirectory owned by
-  another of your groups keeps that group, so the agent can't write it through the group.
-- With `--clone`, the agent can read your repo's whole `.git`, including `.git/config`, as in sbx.
-  A user name and token in an HTTPS remote URL are left out of the clone's own remotes, but they
-  stay in that file, and so does any `http.extraHeader`. Keep credentials out of repo config. Use
-  a credential helper or `bento secret`. `create --clone` warns about remote URLs with a token.
-- `bento exec --privileged` and the sandbox's Docker engine run as root inside the VM.
-- Forkable sandboxes (clone and mountless, not forks) start branchable. On Linux this drops smolvm's
-  no-ptrace hardening of the VM process, so other processes running as you can read its memory,
-  including secret values. On every platform, smolvm stops returning their idle memory. Turn it off
-  with `bento settings set fork.enabled false`, from each sandbox's next start.
-- smolbento refuses to run as root on the host, because smolvm doesn't map a root-owned workspace
-  to the agent user.
-- While the sandbox runs (a service unit serves the bridge; without one, while you're attached
-  with `bento run` or `bento exec -it`), it can open `https://` URLs in your
-  browser and overwrite your clipboard, but it can't read the clipboard. A malicious page opened
-  this way runs in your real browser, with your logins. Turn off URL opening with
-  `bento settings set browser.enabled false`. Clipboard text may be crafted to run commands when
-  pasted, so check it first.
-- Host service units (see [Host services](usage.md#host-services); paths in
-  [Files](configuration.md#files)). Per sandbox with a bridge or a runtime SSH agent grant,
-  smolbento writes a launchd user agent or `systemd --user` socket and service units. They run as
-  you, never as root, listen on a `0600` socket and start `bento _serve KIND SANDBOX` for each
-  connection, with the connection as stdin and stdout and stderr on `/dev/null`. `_serve` is the
-  filter and bridge handler, and reads the grant from the sandbox's labels; the unit carries your
-  `PATH`, `HOME`, `SMOLBENTO_*` variables and, on Linux, `SSH_AUTH_SOCK`, never secrets. Anyone who
-  can write your unit files or your `PATH` can run commands as you, as with any launch agent. Units
-  go with the sandbox (`rm`, `prune`, `reset`, `env rm`, a failed first start) and, for a sandbox
-  deleted with `bento smolvm machine delete`, with the next state-changing command. Names carry a
-  hash of the data dir, so separate setups don't touch each other's units.
-- The sockets live in `~/Library/Application Support/smolbento/sock/` (macOS) or
-  `$XDG_RUNTIME_DIR/smolbento/` (Linux), or `/tmp/sbt-<uid>/` when there is no service manager
-  (served while attached). At create and at each start, smolbento checks that the directory is a
-  real directory (not a symlink), owned by you, with mode 0700, and creates it that way if missing.
-  If the check fails, the sandbox gets no bridge for that start, with a warning. This stops another
-  user from receiving what the sandbox sends by creating the directory first.
-- Forks don't install bridge shims or get units, but they keep the parent's socket mount. While the
-  parent is served, a process in a fork can open URLs, copy and use the SSH agent through the
-  parent's sockets.
-- OAuth callback ports. For an opened URL whose `redirect_uri` is `http://localhost:PORT` or
-  `http://127.0.0.1:PORT`, smolbento listens on your `127.0.0.1:PORT` (never other interfaces) for
-  10 minutes (or until the session ends, in attached-only serving). It opens at most 4 ports a session, and not if something
-  already answers on `localhost:PORT`. It passes requests whose `Host` is `localhost:PORT` or
-  `127.0.0.1:PORT` into the sandbox. Known gaps:
-  - Other local programs can reach that port while it's open, as they could reach an agent's
-    callback server on your machine.
-  - The sandbox can claim that port before a service of yours starts on it.
-  - Pages the sandbox serves there are on `localhost`, whose cookies aren't separated by port. They
-    can read and set the cookies of your other `localhost` apps.
-  - Each replay is cut off after 15 seconds or 1 MiB of response.
-  - `browser.enabled false` also turns the relay off.
-- Built-in agents, and kits that ask with `ssh-agent@1`, can use your SSH agent whenever the sandbox runs (a service unit serves it; without one, while
-  `bento run`, `bento exec -it` or `bento exec` runs for them), and during a kit's `install` grant. They can list
-  your agent's public keys and have it sign with any of them. That covers git commit signatures and
-  SSH logins to any server your keys open. A kit's `sign: [...]` list allows only signatures in
-  those namespaces, not logins. An `authenticate: [...]` list allows logins only to those servers:
-  smolbento verifies the session binding the client sends, and signs only when the binding's host
-  key is one your `ssh.knownHostsFile` (default `~/.ssh/known_hosts`) lists for a named server;
-  anything else is refused without reaching your agent. A server known only through a
-  `@cert-authority` line, or by a wildcard or negated pattern, isn't trusted for this. A kit
-  without `authenticate` can't log in at all. They can't add, remove or lock keys or do anything else;
-  smolbento answers those requests itself with a failure. Your private keys never enter the
-  sandbox.
-  While the agent is served, code in the sandbox can sign as you and log in wherever your keys
-  work. Don't run untrusted work with it. The socket directory gets the bridge's checks (above): no
-  agent for a start while it isn't private, and a kit that requires an agent is refused at create.
-  To turn it off, run `bento settings set ssh.agentForwardingEnabled false`. New connections are
-  refused at once, and open ones stay. Or run `bento` without `SSH_AUTH_SOCK`. For a dedicated agent
-  that holds only the keys you want sandboxes to use, set `ssh.agentSocketPath` to its socket.
-
-## Skills
-
-The shared skills store is agent material. smolbento never runs it, and reads nothing in it beyond
-directory names. What you share with a sandbox is what its agent follows.
-
-- A `readwrite` sandbox can change the skills other sandboxes load. Its agent writes straight into
-  your store, so a changed or added skill is linked into every later sandbox, `readonly` ones
-  included. Use it only for work you trust.
-- `readonly` doesn't isolate a sandbox from changes. The agent can't edit a stored skill, but it
-  loads whatever the store holds at each start, including changes made by a `readwrite` sandbox or
-  by you.
-- Use `--skills off` for untrusted work. The sandbox gets no store and no skills directory.
-- A kit can widen `readwrite` to links. With `--skills readwrite`, a kit that names a `readwrite`
-  directory makes `/run/sbx/skills-shared` read-write. The agent can then
-  change stored skills through every link. Check a kit's `agent-skills@1` modes before using it
-  with `readwrite`.
-- Prefer HTTPS or SSH for `skills add`. `http://` and `git://` URLs are accepted, as in sbx, but
-  their content can change in transit.
-- Linking runs as root in the guest. It creates the skills directory and links in it,
-  and changes the owner of those alone. It refuses a skills directory whose path goes through a
-  symlink anywhere, including a parent such as `~/.claude`, and checks before and after creating
-  the directory so the agent can't redirect it. Image symlinks such as `/home -> /var/home` count
-  too, so such a sandbox gets no skills links.
-- Bundled kit skills are image content. An `agent-skill@1` skill comes from the kit's image, and
-  smolbento only links it. The agent reads its instructions like any skill's, so trust the kit as
-  you would for its install hooks.
 
 ## Supply chain
 
