@@ -259,8 +259,6 @@ impl Engine {
 pub struct Meta {
     pub name: String,
     pub agent: String,
-    /// Primary workspace, the first of `workspaces`; `None` for a mountless sandbox. Not a label.
-    pub workspace: Option<String>,
     /// Every mounted workspace, primary first, as `path` or `path:ro`.
     pub workspaces: Vec<String>,
     /// Unix seconds.
@@ -378,12 +376,10 @@ impl Meta {
         let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
         let egress = text(EGRESS).and_then(|j| crate::egress::Label::from_label(&j));
         let egress_unreadable = labels.contains_key(EGRESS) && egress.is_none();
-        let workspaces: Vec<String> = json(labels, WORKSPACES).unwrap_or_default();
         Some(Meta {
             name: labels.get(NAME)?.clone(),
             agent: text(AGENT).unwrap_or_default(),
-            workspace: (workspaces.first()).map(|w| w.strip_suffix(":ro").unwrap_or(w).to_string()),
-            workspaces,
+            workspaces: json(labels, WORKSPACES).unwrap_or_default(),
             created: labels
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
@@ -443,6 +439,12 @@ impl Meta {
         })
     }
 
+    /// The primary workspace: the first of `workspaces`, without `:ro`; `None` for a mountless
+    /// sandbox.
+    pub fn workspace(&self) -> Option<&str> {
+        (self.workspaces.first()).map(|w| w.strip_suffix(":ro").unwrap_or(w))
+    }
+
     /// A mounted host folder the sandbox can write: a copy would share it with the original.
     pub fn writable_host_folder(&self) -> bool {
         self.workspaces
@@ -480,7 +482,6 @@ mod tests {
         Meta {
             name: "claude-repo".into(),
             agent: "claude".into(),
-            workspace: Some("/w/repo".into()),
             workspaces: vec!["/w/repo".into(), "/w/docs:ro".into()],
             created: 1000,
             engine: Engine::Auto,
@@ -531,13 +532,12 @@ mod tests {
         let mut labels = meta().to_labels();
         labels.insert("sbx.workspaces".into(), r#"["/w/a:ro","/w/b"]"#.into());
         let m = Meta::from_labels(&labels).unwrap();
-        assert_eq!(m.workspace.as_deref(), Some("/w/a"));
+        assert_eq!(m.workspace(), Some("/w/a"));
     }
 
     #[test]
     fn mountless_has_no_workspace() {
         let m = Meta {
-            workspace: None,
             workspaces: vec![],
             ..meta()
         };
@@ -742,7 +742,6 @@ mod tests {
         };
         assert!(clone.forkable());
         let mountless = Meta {
-            workspace: None,
             workspaces: vec![],
             ..meta()
         };

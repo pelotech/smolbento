@@ -159,15 +159,14 @@ pub(crate) fn settle_default_name<R: Runner>(
     };
     let here = ws.display().to_string();
     let all = sandbox::list(&ctx.vm)?;
-    let mine =
-        |s: &&Sandbox| s.meta.agent == req.agent && s.meta.workspace.as_deref() == Some(&here);
+    let mine = |s: &&Sandbox| s.meta.agent == req.agent && s.meta.workspace() == Some(&here);
     if reuse && let Some(sb) = all.iter().find(mine) {
         return Ok(Some(sb.clone()));
     }
     let Some(owner) = all.iter().find(|s| s.name() == req.name && !mine(s)) else {
         return Ok(None);
     };
-    let used_by = owner.meta.workspace.as_deref().unwrap_or("(none)");
+    let used_by = owner.meta.workspace().unwrap_or("(none)");
     let suggested = name::suggest_name(&req.agent, &ws, |n| all.iter().any(|s| s.name() == n));
     if ctx.settings.bool("sandbox.autoName")? {
         eprintln!(

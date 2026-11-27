@@ -53,10 +53,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
             .filter(|(spec, _)| options::picks_host(spec))
             .map(|(_, p)| p.arg()),
     );
-    ctx.vm
-        .update_ports(&sb.machine, &unpublish, &publish, &[])?;
-    // Its own update: smolvm applies one to a running machine only when it changes ports alone
-    // or labels alone (a mix is INVALID_STATE).
+    ctx.vm.update(&sb.machine, &unpublish, &publish, &[])?;
+    // Its own update: the machine may be running (see `Smolvm::update`).
     if auto != sb.meta.rec.auto_ports {
         ctx.vm
             .set_label(&sb.machine, labels::AUTO_PORTS, &auto.join(","))?;

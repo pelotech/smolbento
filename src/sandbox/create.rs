@@ -96,11 +96,9 @@ impl CreateRequest {
 
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
-    let primary = req.workspaces.first().map(|w| w.path.display().to_string());
     Meta {
         name: req.name.clone(),
         agent: req.agent.clone(),
-        workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         version: env!("CARGO_PKG_VERSION").into(),
@@ -244,7 +242,10 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         labels: meta.to_labels(),
         mounts,
         mount_sockets,
-        workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
+        workdir: meta
+            .clone_repo
+            .clone()
+            .or_else(|| meta.workspace().map(String::from)),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
         storage_gib: req.storage_gib,

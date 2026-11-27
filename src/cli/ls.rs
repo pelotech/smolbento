@@ -63,7 +63,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
             agent: &s.meta.agent,
             status: status(s.state),
             ports: &s.ports,
-            workspace: s.meta.workspace.as_deref(),
+            workspace: s.meta.workspace(),
             created_at: crate::util::rfc3339(s.meta.created),
             fork_of: s.meta.fork_of.as_deref(),
         })
@@ -131,7 +131,6 @@ mod tests {
             meta: Meta {
                 name: name.into(),
                 agent: "claude".into(),
-                workspace: workspace.map(String::from),
                 workspaces: workspace.map(|w| vec![w.to_string()]).unwrap_or_default(),
                 created,
                 ..Default::default()

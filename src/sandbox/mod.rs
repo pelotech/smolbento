@@ -123,7 +123,7 @@ impl Sandbox {
 
     /// The primary workspace, else the workload image's WORKDIR, else sbx's mountless directory.
     pub fn workdir(&self) -> String {
-        (self.meta.workspace.as_deref())
+        (self.meta.workspace())
             .or(self.meta.rec.image_workdir.as_deref())
             .unwrap_or(MOUNTLESS_WORKDIR)
             .into()
@@ -340,7 +340,7 @@ pub fn repick_ports<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Result<()> {
         .map(|(p, host)| PortMap { host, ..*p })
         .collect();
     let label = new.iter().map(PortMap::arg).collect::<Vec<_>>().join(",");
-    vm.update_ports(&sb.machine, &old, &new, &[(labels::AUTO_PORTS, label)])
+    vm.update(&sb.machine, &old, &new, &[(labels::AUTO_PORTS, label)])
 }
 
 /// Starts the sandbox if needed. The plan is only computed for a start, because resolving secrets

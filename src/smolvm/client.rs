@@ -447,12 +447,14 @@ impl<R: Runner> Smolvm<R> {
 
     /// Sets several labels in one update, so they change together; running or stopped.
     pub fn set_labels(&self, name: &str, labels: &[(&str, String)]) -> Result<()> {
-        self.update_ports(name, &[], &[], labels)
+        self.update(name, &[], &[], labels)
     }
 
     /// Removes the `remove` mappings, adds `add` and sets `labels`, in one update (smolvm removes
-    /// before it adds); nothing to change makes no call.
-    pub fn update_ports(
+    /// before it adds); nothing to change makes no call. On a running machine smolvm applies an
+    /// update live only when it changes ports alone or labels alone (a mix is `INVALID_STATE`);
+    /// mixing them is for a stopped machine.
+    pub fn update(
         &self,
         name: &str,
         remove: &[PortMap],
@@ -748,14 +750,31 @@ mod tests {
             udp: false,
         };
         vm.update_network("m", &NetworkSpec::Open).unwrap();
-        vm.update_ports("m", &[p], &[p], &[("k", "v".into())])
-            .unwrap();
+        vm.update("m", &[p], &[p], &[]).unwrap();
+        vm.set_label("m", "k", "v").unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec![
                 "machine update -n m --net --reset-allow-list",
-                "machine update -n m --remove-port 8080:80 -p 8080:80 --label k=v",
+                "machine update -n m --remove-port 8080:80 -p 8080:80",
+                "machine update -n m --label k=v",
             ]
+        );
+    }
+
+    /// Ports and labels in one update, as on a stopped machine.
+    #[test]
+    fn a_stopped_machine_updates_ports_and_labels_together() {
+        let vm = Smolvm::new(FakeRunner::new());
+        let p = PortMap {
+            host: 8080,
+            guest: 80,
+            udp: false,
+        };
+        vm.update("m", &[p], &[p], &[("k", "v".into())]).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            ["machine update -n m --remove-port 8080:80 -p 8080:80 --label k=v"]
         );
     }
 
@@ -827,7 +846,7 @@ mod tests {
     #[test]
     fn updating_no_ports_makes_no_call() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.update_ports("m", &[], &[], &[]).unwrap();
+        vm.update("m", &[], &[], &[]).unwrap();
         assert!(vm.runner().call_lines().is_empty());
     }
 

@@ -158,12 +158,12 @@ impl TestEnv {
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
         self.runner().ok(
             &["machine", "status"],
-            &self.sandbox_json(name, state, labels),
+            &self.sandbox_json_in_setup(name, state, labels),
         )
     }
 
     /// [`sandbox_json`], in this setup unless `labels` give an `sbx.setup`.
-    fn sandbox_json(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> String {
+    fn sandbox_json_in_setup(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> String {
         let setup = crate::host_service::namespace(&self.ctx.paths);
         let mut all = labels.to_vec();
         if !labels.iter().any(|(k, _)| *k == "sbx.setup") {
@@ -177,7 +177,7 @@ impl TestEnv {
     pub fn sandboxes(&self, list: &[Listed]) -> &FakeRunner {
         let jsons: Vec<String> = list
             .iter()
-            .map(|(name, state, labels)| self.sandbox_json(name, state, labels))
+            .map(|(name, state, labels)| self.sandbox_json_in_setup(name, state, labels))
             .collect();
         let fake = self.runner();
         fake.ok(
