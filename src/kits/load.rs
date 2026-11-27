@@ -301,9 +301,9 @@ fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())
 }
 
-/// The name `load_with` gives the kit REF names where the agent goes (the sandbox is named after it),
-/// without pulling or building it: trust is checked, then the name comes from the source (or a
-/// v2 `spec.yaml`'s `name`).
+/// The name `load_with` gives the kit REF names where the agent goes (the sandbox is named after
+/// it), without pulling or building it: trust is checked, then the name comes from the source (or
+/// a v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
     let reference = alias(reference).unwrap_or(reference);
     if let Some((name, _)) = builtin_entry(reference) {
