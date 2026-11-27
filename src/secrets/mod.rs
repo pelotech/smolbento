@@ -116,6 +116,11 @@ impl RegistryEntry {
     }
 }
 
+/// Whether `host` is a bare registry host (no scheme, path or user).
+pub fn is_bare_registry_host(host: &str) -> bool {
+    !(host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']))
+}
+
 /// Key in the secret store for a host-wide registry login's password or token.
 pub fn registry_account(host: &str) -> String {
     format!("registry:{host}")

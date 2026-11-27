@@ -174,6 +174,24 @@ macro_rules! warning {
     }};
 }
 
+/// `path` cleaned lexically: `.` dropped, `..` taking the component before it (none above the
+/// root), repeated and trailing `/` collapsed. No file system access, so links aren't followed
+/// (std's `absolute` keeps `..`).
+pub fn clean_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut clean = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            c => clean.push(c),
+        }
+    }
+    clean
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

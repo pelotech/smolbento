@@ -151,6 +151,18 @@ fn placeholders(value: &str) -> Result<Vec<&str>> {
     Ok(names)
 }
 
+/// A URL's host, lowercased, without IPv6 brackets or a trailing dot: the host `check_remote`
+/// checks is the host a sandbox allows.
+fn url_host(url: &reqwest::Url) -> Option<String> {
+    let h = url.host_str()?;
+    Some(
+        h.trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_end_matches('.')
+            .to_ascii_lowercase(),
+    )
+}
+
 /// Checks a remote server's URL and headers at `mcp add`.
 pub fn check_remote(url: &str, headers: &BTreeMap<String, String>) -> Result<()> {
     let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid URL '{url}'"))?;
@@ -163,13 +175,7 @@ pub fn check_remote(url: &str, headers: &BTreeMap<String, String>) -> Result<()>
              Send them in a header instead: --header 'Authorization: Bearer ${{name}}'"
         );
     }
-    let host = parsed
-        .host_str()
-        .with_context(|| format!("'{url}' has no host"))?
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
+    let host = url_host(&parsed).with_context(|| format!("'{url}' has no host"))?;
     let (is_ip, local) = match host.parse::<std::net::IpAddr>() {
         Ok(a) => {
             // `::ffff:127.0.0.1` is 127.0.0.1.

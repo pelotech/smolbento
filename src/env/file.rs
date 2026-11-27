@@ -662,7 +662,7 @@ impl RawFile {
     fn absolutize(&self, value: &mut Value) {
         let abs = |s: &mut String| {
             if let Ok(p) = std::path::absolute(self.dir.join(&*s)) {
-                *s = lexical(&p).display().to_string();
+                *s = crate::util::clean_path(&p).display().to_string();
             }
         };
         // A kit source is local when it's a relative path, or names something beside the file
@@ -739,20 +739,6 @@ impl RawFile {
             None => bail!("{}: {msg}", self.name()),
         }
     }
-}
-
-/// Folds `..` away by name (std's `absolute` keeps it), without touching the filesystem.
-pub(crate) fn lexical(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 enum Seg {

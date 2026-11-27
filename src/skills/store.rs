@@ -114,14 +114,7 @@ impl Store {
     }
 
     pub fn sources(&self) -> Result<Sources> {
-        let path = self.meta.join("sources.json");
-        match fs::read_to_string(&path) {
-            Ok(t) => {
-                serde_json::from_str(&t).with_context(|| format!("parsing {}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Sources::default()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        crate::config::load_json(&self.meta.join("sources.json"))
     }
 
     pub fn save_sources(&self, s: &Sources) -> Result<()> {

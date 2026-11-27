@@ -428,7 +428,9 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             let c: VolumeCfg = decode(config)?;
             no_colon("volume@1", &c.path)?;
             // Cleaned as the storage key is (SPEC-v3 §7.1).
-            let path = clean_path(&c.path);
+            let path = crate::util::clean_path(std::path::Path::new(&c.path))
+                .to_string_lossy()
+                .into_owned();
             if !path.starts_with('/') || path == "/" {
                 bail!(
                     "volume@1 path {:?} must be an absolute path other than /",
@@ -1049,23 +1051,6 @@ fn no_colon(ty: &str, path: &str) -> Result<()> {
         bail!("{ty} path {path:?} can't contain ':' (smolvm reads it as host:guest)");
     }
     Ok(())
-}
-
-/// `path` cleaned lexically: `.` dropped, `..` taking the component before it (none above the
-/// root), repeated and trailing `/` collapsed. No file system access, so links aren't followed.
-fn clean_path(path: &str) -> String {
-    use std::path::{Component, PathBuf};
-    let mut clean = PathBuf::new();
-    for c in std::path::Path::new(path).components() {
-        match c {
-            Component::ParentDir => {
-                clean.pop();
-            }
-            Component::CurDir => {}
-            c => clean.push(c),
-        }
-    }
-    clean.to_string_lossy().into_owned()
 }
 
 /// Absolute with no `.`/`..`/empty components (so no `//` or trailing `/`), not `/`, no NUL.

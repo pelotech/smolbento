@@ -7,8 +7,9 @@ use anyhow::{Result, bail};
 use regex_lite::Regex;
 use serde_json::Value;
 
-use super::file::{ArgDecl, EnvFile, RawFile, lexical, read};
+use super::file::{ArgDecl, EnvFile, RawFile, read};
 use crate::ctx::Unsupported;
+use crate::util::clean_path;
 
 pub struct Loaded {
     pub files: Vec<PathBuf>,
@@ -28,7 +29,7 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
     let (files, user_default) = select(paths, cwd, home)?;
     let project_dir = match paths.first() {
         Some(p) => {
-            let p = lexical(&cwd.join(p));
+            let p = clean_path(&cwd.join(p));
             if p.is_dir() {
                 p
             } else {
@@ -76,12 +77,12 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
 fn select(paths: &[String], cwd: &Path, home: &Path) -> Result<(Vec<PathBuf>, bool)> {
     let mut files = Vec::new();
     if paths.is_empty() {
-        let user = lexical(&home.join(".sbxenv.yaml"));
+        let user = clean_path(&home.join(".sbxenv.yaml"));
         let user_default = user.is_file();
         if user_default {
             files.push(user);
         }
-        let project = lexical(&cwd.join("sbxenv.yaml"));
+        let project = clean_path(&cwd.join("sbxenv.yaml"));
         if project.is_file() {
             files.push(project);
         } else if files.is_empty() {
@@ -90,7 +91,7 @@ fn select(paths: &[String], cwd: &Path, home: &Path) -> Result<(Vec<PathBuf>, bo
         return Ok((files, user_default));
     }
     for p in paths {
-        let p = lexical(&cwd.join(p));
+        let p = clean_path(&cwd.join(p));
         if p.is_dir() {
             let f = p.join("sbxenv.yaml");
             if !f.is_file() {
@@ -358,7 +359,7 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
             bail!("{at}: the host is listed twice (hosts don't differ by case)");
         }
         hosts.push(lower);
-        if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
+        if !crate::secrets::is_bare_registry_host(host) {
             bail!("{at}: use a bare registry host like ghcr.io (no scheme or path)");
         }
         for (what, s) in [

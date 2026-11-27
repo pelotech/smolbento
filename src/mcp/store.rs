@@ -26,12 +26,7 @@ impl Server {
     /// A remote server's host name or address, lowercased.
     pub fn host(&self) -> Option<String> {
         match self {
-            Server::Remote { url, .. } => reqwest::Url::parse(url).ok()?.host_str().map(|h| {
-                h.trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .trim_end_matches('.')
-                    .to_string()
-            }),
+            Server::Remote { url, .. } => super::url_host(&reqwest::Url::parse(url).ok()?),
             Server::Command { .. } => None,
         }
     }

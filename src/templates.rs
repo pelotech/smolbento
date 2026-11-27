@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{self, Paths};
 
 pub const INDEX: &str = "templates.json";
-pub const ARCHIVE_META: &str = "smolbento-template.json";
-pub const ARCHIVE_PACK: &str = "template.smolmachine";
+pub(crate) const ARCHIVE_META: &str = "smolbento-template.json";
+pub(crate) const ARCHIVE_PACK: &str = "template.smolmachine";
 
 /// A template name as Docker reads an image ref: `chk-tpl` is `docker.io/library/chk-tpl:latest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,17 +136,7 @@ impl Store {
     }
 
     fn read(&self) -> Result<Index> {
-        let path = self.dir.join(INDEX);
-        match std::fs::read_to_string(&path) {
-            Ok(s) => {
-                serde_json::from_str(&s).with_context(|| format!("reading {}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Index {
-                version: 1,
-                templates: vec![],
-            }),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        config::load_json(&self.dir.join(INDEX))
     }
 
     fn write(&self, index: &Index) -> Result<()> {
@@ -166,18 +156,18 @@ impl Store {
     /// `name` as a ref, else as an id prefix of 4 or more hex digits (sbx accepts a prefix).
     /// A prefix that names more than one template is an [`Ambiguous`] error.
     pub fn find(&self, name: &str) -> Result<Option<Entry>> {
-        let all = self.list()?;
-        if let Ok(r) = TemplateRef::parse(name)
-            && let Some(e) = all.iter().find(|e| e.full() == r.full())
-        {
-            return Ok(Some(e.clone()));
+        if let Some(e) = self.find_ref(name)? {
+            return Ok(Some(e));
         }
         let hex = name.len() >= 4 && name.bytes().all(|b| b.is_ascii_hexdigit());
         if !hex {
             return Ok(None);
         }
         let prefix = name.to_ascii_lowercase();
-        let mut hits = all.into_iter().filter(|e| e.id.starts_with(&prefix));
+        let mut hits = self
+            .list()?
+            .into_iter()
+            .filter(|e| e.id.starts_with(&prefix));
         let first = hits.next();
         if first.is_some() && hits.next().is_some() {
             return Err(Ambiguous.into());
