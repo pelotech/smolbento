@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::io::Write;
 use std::path::PathBuf;
 
-use super::{Ctx, DiagnoseArgs, DiagnoseFormat, Format};
+use super::{Ctx, DiagnoseArgs};
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &DiagnoseArgs) -> Result<i32> {
@@ -34,13 +34,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &DiagnoseArgs) -> Result<i32> {
     let checks: Vec<(bool, String)> = named.iter().map(|(_, c)| c.clone()).collect();
     let (text, code) = report(&checks);
     let doc = structured(&named);
-    // `--json` wins over `--format`, which defaults to a table.
-    let format = if a.json {
-        Some(Format::Json)
-    } else {
-        a.format.map_or(Some(Format::Table), DiagnoseFormat::shared)
-    };
-    let text = match format {
+    let text = match a.pick() {
         Some(f) => f.structured(&doc)?.unwrap_or(text),
         None => github_issue(&doc)?,
     };

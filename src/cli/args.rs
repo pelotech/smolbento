@@ -485,18 +485,6 @@ pub enum DiagnoseFormat {
     GithubIssue,
 }
 
-impl DiagnoseFormat {
-    /// The format every command has; `None` for the report only `diagnose` prints.
-    pub fn shared(self) -> Option<Format> {
-        match self {
-            DiagnoseFormat::Table => Some(Format::Table),
-            DiagnoseFormat::Json => Some(Format::Json),
-            DiagnoseFormat::Yaml => Some(Format::Yaml),
-            DiagnoseFormat::GithubIssue => None,
-        }
-    }
-}
-
 #[derive(Debug, Default, Args)]
 pub struct DiagnoseArgs {
     /// Output format: table, json, yaml or github-issue
@@ -508,6 +496,19 @@ pub struct DiagnoseArgs {
     /// sbx sends the report to Docker support; smolbento has nowhere to send one
     #[arg(long, hide = true)]
     pub upload: bool,
+}
+
+impl DiagnoseArgs {
+    /// As `OutputArgs::pick`; `None` for the report only `diagnose` prints.
+    pub fn pick(&self) -> Option<Format> {
+        match self.format {
+            _ if self.json => Some(Format::Json),
+            None | Some(DiagnoseFormat::Table) => Some(Format::Table),
+            Some(DiagnoseFormat::Json) => Some(Format::Json),
+            Some(DiagnoseFormat::Yaml) => Some(Format::Yaml),
+            Some(DiagnoseFormat::GithubIssue) => None,
+        }
+    }
 }
 
 #[derive(Debug, Default, Args)]
