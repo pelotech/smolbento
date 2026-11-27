@@ -359,7 +359,9 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
             bail!("{at}: the host is listed twice (hosts don't differ by case)");
         }
         hosts.push(lower);
-        crate::secrets::check_registry_host(host, &at)?;
+        if !crate::secrets::is_bare_registry_host(host) {
+            bail!("{at}: use a bare registry host like ghcr.io (no scheme or path)");
+        }
         for (what, s) in [
             ("secret", Some(&r.secret)),
             ("username", r.username.as_ref()),

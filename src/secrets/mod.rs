@@ -116,12 +116,9 @@ impl RegistryEntry {
     }
 }
 
-/// Fails unless `host` is a bare registry host (no scheme, path or user). `at` starts the message.
-pub fn check_registry_host(host: &str, at: &str) -> Result<()> {
-    if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
-        bail!("{at}: use a bare registry host like ghcr.io (no scheme or path)");
-    }
-    Ok(())
+/// Whether `host` is a bare registry host (no scheme, path or user).
+pub fn is_bare_registry_host(host: &str) -> bool {
+    !(host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']))
 }
 
 /// Key in the secret store for a host-wide registry login's password or token.

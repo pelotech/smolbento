@@ -3,16 +3,24 @@
 use super::{Server, env_var, placeholder};
 use crate::util::sh_quote;
 
+/// The script writer for each agent with a registrar: the one list of them.
+fn registrar(agent: &str) -> Option<fn(&str, &Server) -> String> {
+    match agent {
+        "claude" => Some(claude),
+        _ => None,
+    }
+}
+
 /// Whether `--static-mcp` can register servers for this agent.
 pub fn has_registrar(agent: &str) -> bool {
-    agent == "claude"
+    registrar(agent).is_some()
 }
 
 /// The guest script (run as the agent's user) that adds `server` to the agent's MCP config, or
 /// `None` for an agent without a registrar. A header's `${placeholder}` becomes the guest's
 /// `$SBX_MCP_…` variable, which holds smolvm's placeholder for the secret, never its value.
 pub fn register_script(agent: &str, name: &str, server: &Server) -> Option<String> {
-    has_registrar(agent).then(|| claude(name, server))
+    registrar(agent).map(|write| write(name, server))
 }
 
 /// `claude mcp add`, as in Claude Code's docs: options, the name, then the URL (and `--header`s
