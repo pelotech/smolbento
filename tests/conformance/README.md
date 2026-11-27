@@ -24,7 +24,9 @@ The failures left are:
   recorded in [sbx compatibility](../../docs/sbx-compatibility.md#kits).
 - `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and `§7.1.2/exact-version`:
   they use the suite's selection controls (`--reject-capability`, selection records) that smolbento
-  doesn't have.
+  doesn't have. A record isn't only what was skipped: the adapter returns retained selected and
+  skipped records with each member's original kit and path, and the effective permission surface,
+  and `selection-policy` needs `recreate`. So these wait for `recreate`.
 - The `sbx@1` workspace and identity environment checks (`environment-provided`, `-process`,
   `-internal`, `-hooks`, `-hooks-internal`, `identity-stable`, `identity-new-after-deletion`).
   They read the environment the workload's agent was launched with by `create` and `start`. Like
