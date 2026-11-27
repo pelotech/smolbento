@@ -200,7 +200,8 @@ kits you trust.
     credential needed only while installing is gone after install.
 - Install steps run as root. Startup and v2 steps get the whole sandbox environment, including
   secret variables, which hold placeholders ([Kits](kits.md#kits) has each step's environment). A
-  failing startup step stops the sandbox from starting until it's fixed.
+  failing startup step is a warning with the startup log's last lines, and the sandbox starts
+  anyway, as in sbx.
 - A workload kit's agent runs as the image's `USER`, or as root if there is none, and can write
   your workspace.
 - Kit host mounts (`host-mount@1`) are directories on your machine. Writes land on your disk,

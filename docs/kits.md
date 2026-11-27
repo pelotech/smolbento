@@ -182,7 +182,8 @@ A kit can name the file instead, with `directory` and `filename` in its `agent-c
 agent's kit does for the place its agent reads at startup (`/home/agent/.claude/CLAUDE.md`). Any
 kit can, a mixin too. Every file named this way gets every kit's instructions, so two agents in one
 sandbox each read all of them, and the file beside the workspace isn't written. A `filename`
-without a `directory` counts only in the workload kit.
+without a `directory` is for the workload kit only: a v3 mixin with one is refused at load, and a v2
+mixin's is ignored with a warning.
 
 How the text gets there depends on the `agent-context` version the kits declare:
 
