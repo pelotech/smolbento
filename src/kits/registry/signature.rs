@@ -13,7 +13,7 @@ use crate::kits::registry::auth::Logins;
 use crate::util::sha256_digest;
 
 use super::{parse_ref, with_client};
-use crate::kits::artifact::empty_descriptor;
+use crate::kits::artifact::{EMPTY_BLOB, empty_descriptor};
 
 pub(super) const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
 pub(super) const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
@@ -94,7 +94,7 @@ pub fn push_signature(
     let at = |d: &str| Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
     with_client(&r, logins, RegistryOperation::Push, async |client| {
         client
-            .push_blob(&r, b"{}".to_vec(), &sha256_digest(b"{}"))
+            .push_blob(&r, EMPTY_BLOB.to_vec(), &sha256_digest(EMPTY_BLOB))
             .await?;
         client
             .push_blob(&r, bundle.to_vec(), &bundle_digest)

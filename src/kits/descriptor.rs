@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use super::model::{Inject, OAuthReq};
+use super::model::Inject;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -82,19 +82,6 @@ pub(super) fn api_key(
         .map(|(n, i)| i.into_inject().map_err(|e| err(n, e)))
         .collect::<Result<_>>()?;
     Ok(((!k.name.is_empty()).then_some(k.name), inject))
-}
-
-/// A credential's `oauth` fields that smolbento acts on.
-pub(super) fn oauth(
-    passthrough: bool,
-    token_endpoint: Option<TokenEndpoint>,
-    resource_hosts: Vec<String>,
-) -> OAuthReq {
-    OAuthReq {
-        passthrough,
-        token_host: token_endpoint.map(|t| t.host),
-        resource_hosts,
-    }
 }
 
 #[derive(Deserialize)]

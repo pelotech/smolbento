@@ -819,16 +819,14 @@ pub fn select_contexts(
             ),
         }
     }
-    let dropped = all.iter().map(|c| &*c.kit);
-    warn_once(
-        dropped.filter(|k| !all.iter().any(|o| o.kit == *k && o.version == version)),
-        |kit| {
-            format!(
-                "kit {kit}: agent-context@{other} skipped (this sandbox's kits use \
-                 agent-context@{version})"
-            )
-        },
-    );
+    let dropped = (all.iter().map(|c| &*c.kit))
+        .filter(|k| !all.iter().any(|o| o.kit == *k && o.version == version));
+    warn_once(dropped, |kit| {
+        format!(
+            "kit {kit}: agent-context@{other} skipped (this sandbox's kits use \
+             agent-context@{version})"
+        )
+    });
     let kept = all.iter().filter(|c| c.version == version).collect();
     Ok((Some(version), kept))
 }

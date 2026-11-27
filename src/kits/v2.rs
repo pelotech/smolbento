@@ -373,9 +373,11 @@ fn credential(c: CredCfg) -> Result<CredReq> {
     }
     let (env, inject) =
         descriptor::api_key(c.api_key, |_, e| anyhow!("credentials: {} {e}", c.service))?;
-    let oauth = c
-        .oauth
-        .map(|o| descriptor::oauth(o.passthrough, o.token_endpoint, o.resource_hosts));
+    let oauth = c.oauth.map(|o| OAuthReq {
+        passthrough: o.passthrough,
+        token_host: o.token_endpoint.map(|t| t.host),
+        resource_hosts: o.resource_hosts,
+    });
     Ok(CredReq {
         service: c.service,
         install: false,
