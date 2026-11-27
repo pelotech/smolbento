@@ -10,9 +10,8 @@ seeing only a placeholder for the API key](https://github.com/pelotech/smolbento
 ## Why smolbento
 
 It keeps the commands and kits of Docker Sandboxes, is open source and needs no account. Each
-command calls smolvm directly. See
-[smolbento and Docker Sandboxes](docs/comparison.md) for how the two differ, and
-[sbx compatibility](docs/sbx-compatibility.md) for every command and flag.
+command calls smolvm directly. [sbx compatibility](docs/sbx-compatibility.md) lists every command
+and flag.
 
 ## How a sandbox is isolated
 
@@ -95,6 +94,20 @@ placeholder. Choose a network policy when asked (`balanced` suits most work). Wh
 session ends, the sandbox stops. Run `bento run claude` again to pick up where you left off. See
 [Secrets](docs/network-and-secrets.md#secrets).
 
+## smolbento and Docker Sandboxes
+
+smolbento is an independent project. It isn't affiliated with or endorsed by Docker. It exists
+because Docker designed a good command line and published a
+[kit spec](https://github.com/docker/sandbox-kit-spec) for running agents in sandboxes, and
+smolbento follows both. Both run each agent in its own microVM, and neither needs Docker Engine on
+the host. The agents and kits Docker publishes work in either.
+
+Docker Sandboxes is the reference implementation, from the team that designed the command line
+and the kit spec. It also runs on Windows, and offers cloud sandboxes and organization policy.
+smolbento suits you when you want an open-source tool with no account and no background process, on
+macOS or Linux. [sbx compatibility](docs/sbx-compatibility.md#at-a-glance) compares the two and
+lists every command, flag or kit that behaves differently.
+
 ## Documentation
 
 - [Usage](docs/usage.md): running agents, workspaces, files, cleaning up
@@ -102,4 +115,4 @@ session ends, the sandbox stops. Run `bento run claude` again to pick up where y
 - [Network policy and secrets](docs/network-and-secrets.md), and [environment files](docs/environments.md)
 - [Configuration](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Full index](docs/README.md): architecture, security, development and contributing
+- [Full index](docs/README.md): every page, including security, architecture and contributing

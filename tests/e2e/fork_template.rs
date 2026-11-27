@@ -137,7 +137,7 @@ pub(crate) fn template_round_trip() {
         "exec runs in the workspace: {got}"
     );
 
-    // Nested saves are refused (smolvm can't pack them: see development-status.md).
+    // Nested saves are refused (smolvm can't pack them: see docs/sbx-compatibility.md#templates).
     e.ok(&["stop", &copy]);
     let out = e.sbt(&["template", "save", &copy, "e2e-tpl:v2"]);
     assert!(!out.status.success());

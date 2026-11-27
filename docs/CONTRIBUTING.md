@@ -32,7 +32,6 @@ On a Mac, run all three. CI runs Linux only by default (see [CI](development.md#
 2. If sbx has it, add a line to `tests/parity/sbx-commands.txt`.
 3. Test the handler against the fake runner, asserting the smolvm command line.
 4. Update the `--help` snapshots (`cargo insta review`) and the docs.
-5. Update [Development status](development-status.md) if it moves a phase forward.
 
 ## Agents
 
