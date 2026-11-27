@@ -82,7 +82,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   mode unless the sandbox has host access, which a `localhost` allow rule gives at create; the check
   says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. Which UDP each egress
-  mode sends: [sbx compatibility](sbx-compatibility.md#network-and-secrets).
+  mode sends: [Hosted egress](#hosted-egress).
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
   sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
   the connection's verdict; `policy ls --wide` shows the request rules.
@@ -243,8 +243,6 @@ gist.github.com:443: …`). `bento rm` removes the log with the sandbox.
 A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its parent's
 CA and token: the copied guest already trusts that CA and holds those placeholders. It keeps the
 parent's sandbox rules, as every fork does.
-
-The Linux systemd units are tested in CI, and the macOS launchd units by running `just e2e` on a Mac.
 
 #### Request rules
 

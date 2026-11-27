@@ -48,9 +48,8 @@ go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
 a local kit, even if a directory has that name; only `docker`, `git-signing` and `nix` are bare kit
-names. `bento create my-kit` is an unknown agent and `--kit my-kit` an error (the messages: [sbx
-compatibility](sbx-compatibility.md#what-works-as-in-sbx)). Write `docker.io/library/alpine` for
-the alpine image.
+names. `bento create my-kit` is an unknown agent and `--kit my-kit` an error. Write
+`docker.io/library/alpine` for the alpine image.
 
 Kits declare versions with `provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A
 missing or mismatched capability stops the create, with one line per problem. Agent kits provide

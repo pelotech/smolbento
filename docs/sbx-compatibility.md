@@ -19,7 +19,7 @@ documentation, not tried by us. We haven't checked how sbx is licensed. Correcti
 |---|---|---|
 | Account | None. Agent kits pull from Docker Hub without a login | Docker sign-in (`sbx login`) |
 | Source | Open source, Apache-2.0 | Distributed by Docker as binaries |
-| Background process | None. Each command calls smolvm directly | A local daemon |
+| Background process | No daemon; per-sandbox helper processes run as launchd or `systemd --user` units | A local daemon |
 | MicroVM | [smolvm](https://github.com/smol-machines/smolvm) (libkrun: Hypervisor.framework on macOS, KVM on Linux) | Docker's hypervisor sandbox |
 | Hosts | macOS on Apple Silicon; Linux x86_64 or arm64 with KVM | macOS 14+ on Apple Silicon, Windows 11, Ubuntu 24.04+ |
 | Command line | sbx's commands and flags; `alias sbx=bento` makes it a drop-in | `sbx` |

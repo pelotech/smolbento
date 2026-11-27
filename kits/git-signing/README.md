@@ -1,8 +1,8 @@
 # git-signing kit
 
 Signs the commits made in a sandbox with a key from your SSH agent, under any agent, and sets your
-git name and email. The private key never enters the sandbox, and the sandbox can use
-the agent for git signatures only.
+git name and email. The private key never enters the sandbox, and the sandbox can use the agent
+for git signatures only.
 
 ```sh
 bento create claude . --kit git-signing
@@ -39,8 +39,7 @@ It is built into `bento`, so nothing is downloaded.
 ## Limits
 
 - The image needs `git` 2.36 or newer (with an older one nothing is signed), `ssh-add` and
-  `ssh-keygen` (the OpenSSH client). The built-in agents' images
-  have them.
+  `ssh-keygen` (the OpenSSH client). The built-in agents' images have them.
 - The SSH agent is attached when a sandbox is created. With none on the host, the sandbox is created
   without one: repositories with a remote then refuse to commit until you create it again with an
   agent. See [SSH agent](../../docs/usage.md#ssh-agent).

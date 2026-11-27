@@ -34,6 +34,9 @@ only some checkouts have it. If it's there, read the relevant section before cha
   `docs/spec/capabilities/com.docker.sandbox/`, and name the rule's `tck:` id in the test. Where sbx
   behaves differently from the spec, follow the spec and record the difference in
   `docs/sbx-compatibility.md`. `just conformance` runs the spec's own suite.
+- **`crates/egress-front` names nothing of smolbento.** It is the only crate on smolvm's
+  `smolvm-credentials` and `smolvm-protocol`, written to be lifted into smolvm, so it uses no bento
+  terms. See its README.
 - macOS and Linux now. Keep path handling in `workspace` so Windows can be added later. smolvm itself
   runs on Windows hosts, with the caveats in its `docs/limitations.md`.
 
@@ -153,7 +156,7 @@ not listed here.
 | `host_service` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets; the orphan sweep |
 | `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
 | `ssh` | `setup ssh` config block; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
-| `crates/egress-front` | workspace member, the only crate on smolvm's `smolvm-credentials` and `smolvm-protocol` (git, at a fork `rev`: see its `Cargo.toml`); written to be lifted into smolvm, so no bento terms; see its README |
+| `crates/egress-front` | workspace member, the only crate on smolvm's `smolvm-credentials` and `smolvm-protocol`; see its README |
 
 Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the plus image.
 
@@ -161,14 +164,13 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
 
 - Dev shell: `direnv allow` once (nix-direnv loads the flake). Shells without the direnv hook, such as
   agent tool shells, use `direnv exec . <cmd>`.
-- `crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork, made by `just smolvm-fork BASE`
-  (the tag's name says its base). A smolvm bump doesn't need a new tag; one that egress-front needs newer
-  smolvm-credentials code for does, and it updates the crate's `tag` and the flake hash.
-- Fetching the smolvm git dependency may need `CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_LFS_SKIP_SMUDGE=1`: a user git
-  config can rewrite https to ssh, and smolvm's repo carries ~800 MB of LFS the crate doesn't need.
-- Recipes: `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek),
-  `just e2e [threads] [filter]` (boots real VMs; needs a hypervisor), and `just check-target TARGET`
-  (cross-compiles in a container).
+- Recipes, tests, CI and releases: [docs/development.md](docs/development.md). `just e2e [threads]
+  [filter]` boots real VMs (needs a hypervisor).
+- `crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork. To make a tag
+  or fetch the git dependency, see
+  [egress-front's smolvm crates](docs/development.md#egress-fronts-smolvm-crates).
+  A smolvm bump doesn't need a new tag; one that egress-front needs newer smolvm-credentials code
+  for does (update the crate's `tag` and the flake hash).
 - **Testing: fastest check first, each long run once.**
   - While iterating, run only the tests for what you changed: `direnv exec . cargo nextest run --lib
     <module or test name>`, or one group of e2e tests with `just e2e 2 <name filter>` (for example
@@ -195,10 +197,9 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
   step with `.config/nextest.toml`), the rest by nextest's `--partition slice:N/3`. So an e2e test
   can't rely on another having run on the same machine. GitHub's arm64 Linux and macOS runners can't
   boot VMs. A macOS unit-test job runs only on manual `workflow_dispatch` with `macos: true`.
-- The macOS release binary is cross-compiled on Linux and never run in CI. The full release builds
-  run on the release-please PR and on PRs that change the build's inputs. Before merging a
-  release-please PR, run `just test` and `just e2e` on a Mac. To build it natively instead, change
-  its release matrix entry to `runner: macos-latest, builder: cargo`.
+- The macOS release binary is cross-compiled on Linux and never run in CI. Before merging a
+  release-please PR, run `just test` and `just e2e` on a Mac
+  ([Releases](docs/development.md#releases)).
 - New command or flag: add a parity line to `tests/parity/sbx-commands.txt` if it exists in sbx, a
   fake-`Runner` test asserting the smolvm argv, and update `--help` snapshots (`cargo insta review`).
 - Reference smolvm source: `../smolvm-ref` (flags in `src/cli/machine.rs`, Smolfile in
