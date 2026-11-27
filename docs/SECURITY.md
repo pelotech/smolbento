@@ -190,6 +190,8 @@ kits you trust.
   config in a mounted repo, lands on your machine. With `--clone`, the agent can't write to your
   repo. Only commits come back, on `git fetch sandbox-<name>` (not tags). Review them before you
   merge, and check fetched objects with `git -c fetch.fsckObjects=true fetch`.
+- smolvm maps only a mounted directory's owner and group to the agent. A subdirectory owned by
+  another of your groups keeps that group, so the agent can't write it through the group.
 - With `--clone`, the agent can read your repo's whole `.git`, including `.git/config`, as in sbx.
   A user name and token in an HTTPS remote URL are left out of the clone's own remotes, but they
   stay in that file, and so does any `http.extraHeader`. Keep credentials out of repo config. Use

@@ -9,19 +9,23 @@ Each sandbox is a small VM with its own kernel and Docker engine. Your project d
 at the same path inside it. The agent runs with permission prompts off, because the VM is the
 boundary.
 
-## Pages
+## Guides
 
 - [Install](install.md): prerequisites, installing, checking your setup
 - [Usage](usage.md): running agents, workspaces, exec, copying files, cleaning up
+- [Network policy and secrets](network-and-secrets.md): what a sandbox may reach, and API keys
 - [Kits, skills, MCP servers and templates](kits.md): what a sandbox is built from
 - [Environment files](environments.md): `sbxenv.yaml`
-- [Network policy and secrets](network-and-secrets.md): what a sandbox may reach, and API keys
-- [Configuration](configuration.md): settings, environment variables, where files live
-- [smolbento and Docker Sandboxes](comparison.md): how the two differ, and which to use
-- [sbx compatibility](sbx-compatibility.md): what works like sbx, what doesn't yet, and what is out of scope
 - [Troubleshooting](troubleshooting.md): `bento diagnose` and common problems
-- [Architecture](architecture.md): how smolbento drives smolvm
+
+## Reference
+
+- [Configuration](configuration.md): settings, environment variables, where files live
+- [sbx compatibility](sbx-compatibility.md): how smolbento differs from sbx, command by command
 - [Security](SECURITY.md): what a sandbox isolates today, and reporting issues
+
+## Contributors
+
 - [Development](development.md): building, testing, CI and releases
-- [Development status](development-status.md): what's done and what's left
-- [Contributing](CONTRIBUTING.md)
+- [Architecture](architecture.md): how smolbento drives smolvm
+- [Contributing](CONTRIBUTING.md): the checklist for a change

@@ -9,7 +9,21 @@ scripts fail clearly instead of doing something different.
 
 What this page says about sbx is measured on those versions or read in Docker's documentation,
 which is the authority. It can be out of date. Items marked "not measured" are our best guess.
-Corrections are welcome as [issues](https://github.com/pelotech/smolbento/issues).
+Windows and Ubuntu host support, cloud sandboxes and organization policy are from Docker's
+documentation, not tried by us. We haven't checked how sbx is licensed. Corrections are welcome as
+[issues](https://github.com/pelotech/smolbento/issues).
+
+## At a glance
+
+| | smolbento | Docker Sandboxes (`sbx`) |
+|---|---|---|
+| Account | None. Agent kits pull from Docker Hub without a login | Docker sign-in (`sbx login`) |
+| Source | Open source, Apache-2.0 | Distributed by Docker as binaries |
+| Background process | None. Each command calls smolvm directly | A local daemon |
+| MicroVM | [smolvm](https://github.com/smol-machines/smolvm) (libkrun: Hypervisor.framework on macOS, KVM on Linux) | Docker's hypervisor sandbox |
+| Hosts | macOS on Apple Silicon; Linux x86_64 or arm64 with KVM | macOS 14+ on Apple Silicon, Windows 11, Ubuntu 24.04+ |
+| Command line | sbx's commands and flags; `alias sbx=bento` makes it a drop-in | `sbx` |
+| Cloud sandboxes | No | Yes |
 
 ## Works today
 
@@ -66,6 +80,7 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
 |---|---|---|
 | Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). More below. |
 | `--auto-create` | Adds desktop app connections | Not supported |
+| `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Not documented | Not implemented |
 | Sessions | The daemon terminates SSH; an unknown sandbox is an error; a stopped one is started | Same, in the `ProxyCommand` process. The shell is the session user's login shell in the workspace, on a pty from your terminal |
 | Local forwarding (`ssh -L`) | To the sandbox's loopback | Same, `localhost`, `127.0.0.0/8` and `::1` only. Each connection runs `nc` in the sandbox, else bash's `/dev/tcp`; with neither, the forward fails with a message |
 | SFTP, `scp`, agent forwarding, X11, remote forwarding | Not documented | Refused |
@@ -130,6 +145,7 @@ the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-net
 | `kit inspect --resolved` | Merges the kit's `extends:` parent into the output | Accepted; prints the same as without it. smolbento's loader accepts `extends:` and ignores it, so there is no parent to merge |
 | `diagnose --format github-issue` | A Markdown report for a GitHub issue: OS, architecture, `DS Version`, a `Check \| Status \| Message` table, and the JSON in a `<details>` block | Same shape over smolbento's checks, with `smolbento Version`. Statuses are `✓` and `✗` (`✗` wasn't measured in sbx). Messages are the ones `bento diagnose` prints, paths included: read it before posting |
 | `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
+| `kit provenance`, `kit builder` | Available | Not implemented |
 | `--format`, `--json` | On every command that prints something | The same flags on every command that prints something, except `template inspect` (refused: sbx has it for cloud templates only). Differences in the output: [Output formats](#output-formats) |
 
 - **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
@@ -209,7 +225,7 @@ servers are written into the agent's own MCP config at create.
 | `ls` | Docker images and saved templates | Saved templates only. FLAVOR is the agent |
 | Agent mismatch | Fails in the kit step (`failed to apply kit to sandbox`) | Refused up front |
 | `/tmp` | Kept | Not kept |
-| Saving a sandbox made from a template | Not measured; sbx adds a layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
+| Saving a sandbox made from a template | Not measured; sbx adds a layer per save | Refused: smolvm can't pack a machine created from a pack ("no flattened rootfs was found", with or without `--deny-cidr`), and `--rebase-from-image` drops the first template's files |
 | What a template keeps | The disk | The disk, and the sandbox's kits by pinned ref with their args. A create from it loads them again (from the kit cache when they're there) and reruns their install and startup steps. The sandbox runs the command its source sandbox ran. A template without kit records or a command is refused: save it again |
 | `-t` with `--kit` | Not measured | Refused when a kit adds image layers (a template's disk is saved whole) |
 | Kit args | Not measured where sbx keeps them | Kept with the sandbox (`sbx.kits`), in its templates and their archives, defaults included |

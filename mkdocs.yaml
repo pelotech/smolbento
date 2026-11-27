@@ -13,7 +13,6 @@ nav:
   - Architecture: architecture.md
   - Security: SECURITY.md
   - Development: development.md
-  - Development status: development-status.md
   - Contributing: CONTRIBUTING.md
 
 plugins:

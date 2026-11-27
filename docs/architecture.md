@@ -77,5 +77,3 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/ssh/` | The `~/.ssh/config` block `setup ssh` manages; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
 | `src/log.rs` | `SMOLBENTO_LOG` and `-D`: step spans and timings on stderr |
-
-Later phases are listed in [Development status](development-status.md).
