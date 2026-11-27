@@ -9,7 +9,7 @@ mod spec;
 
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, EnvRunArgs,
-    ExecArgs, RunArgs, SandboxOpts, SecretSource, confirm_or,
+    EnvSelectOpts, ExecArgs, RunArgs, SandboxOpts, SecretSource, confirm_or,
 };
 use crate::env::approval::{self, Need};
 use crate::env::file::{Binding, HostCommand, SecretDecl};
@@ -223,26 +223,19 @@ fn env_run<R: Runner>(ctx: &mut Ctx<R>, run: EnvRunArgs) -> Result<i32> {
 fn load_name<R: Runner>(
     ctx: &Ctx<R>,
     paths: &[String],
-    name_flag: Option<&str>,
-    env_arg: &[String],
-    env_args_file: &[std::path::PathBuf],
+    s: &EnvSelectOpts,
 ) -> Result<(Loaded, String)> {
-    let loaded = load_files(ctx, paths, env_arg, env_args_file)?;
-    let name = name(&loaded, name_flag)?;
+    let loaded = load_files(ctx, paths, s)?;
+    let name = name(&loaded, s.name.as_deref())?;
     Ok((loaded, name))
 }
 
 /// Loads the environment files with their arguments.
-fn load_files<R: Runner>(
-    ctx: &Ctx<R>,
-    paths: &[String],
-    env_arg: &[String],
-    env_args_file: &[std::path::PathBuf],
-) -> Result<Loaded> {
+fn load_files<R: Runner>(ctx: &Ctx<R>, paths: &[String], s: &EnvSelectOpts) -> Result<Loaded> {
     let home = ctx.env.get("HOME").context("HOME is not set")?;
     let inputs = ArgInputs {
-        files: env_args_file.to_vec(),
-        flags: env_arg.to_vec(),
+        files: s.env_args_file.clone(),
+        flags: s.env_arg.clone(),
     };
     load(paths, &inputs, &ctx.cwd, Path::new(home))
 }
@@ -257,7 +250,7 @@ fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
     if command.is_empty() {
         bail!("specify a command to run, e.g. `bento env exec -- bash`");
     }
-    let (loaded, name) = load_name(ctx, &paths, a.name.as_deref(), &a.env_arg, &a.env_args_file)?;
+    let (loaded, name) = load_name(ctx, &paths, &a.select)?;
     if sandbox::find(&ctx.vm, &name)?.is_none() {
         bail!("sandbox '{name}' not found for this environment\n  try: bento env create");
     }
@@ -281,14 +274,7 @@ fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
 }
 
 fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
-    let c = &a.common;
-    let (loaded, name) = load_name(
-        ctx,
-        &c.paths,
-        c.name.as_deref(),
-        &c.env_arg,
-        &c.env_args_file,
-    )?;
+    let (loaded, name) = load_name(ctx, &a.common.paths, &a.common.select)?;
     // What is stored for the sandbox, removed with it.
     let stored = SecretsFile::load(&ctx.paths)?;
     let scope = scope_for(Some(&name));
@@ -341,10 +327,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         crate::warning!("the preRemove commands did not finish: {e:#}");
     }
     match sb {
-        Some(sb) => {
-            super::lifecycle::delete_sandbox(ctx, sb, true)?;
-            writeln!(&ctx.out, "Removed sandbox {name}")?;
-        }
+        Some(sb) => super::lifecycle::remove(ctx, sb, true)?,
         // No sandbox: only the secrets (and any stale policy) are left to forget.
         None if !nothing_stored => super::secret::forget_sandbox(ctx, &name, true)?,
         None => {}
@@ -377,9 +360,9 @@ fn prepare<R: Runner>(
     c: &EnvCommon,
     o: &EnvOverrideOpts,
 ) -> Result<(Loaded, EnvSpec)> {
-    let loaded = load_files(ctx, &c.paths, &c.env_arg, &c.env_args_file)?;
+    let loaded = load_files(ctx, &c.paths, &c.select)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let spec = spec(&loaded, c.name.as_deref(), o, &secrets)?;
+    let spec = spec(&loaded, c.select.name.as_deref(), o, &secrets)?;
     Ok((loaded, spec))
 }
 
@@ -516,20 +499,27 @@ fn provision<R: Runner>(ctx: &Ctx<R>, spec: &EnvSpec) -> Result<()> {
 
 /// The value of a registry source now: a literal, or what its reference or command gives.
 fn source_value<R: Runner>(ctx: &Ctx<R>, decl: &SecretDecl) -> Result<String> {
-    let source = match (&decl.value, &decl.r#ref, &decl.command) {
-        (Some(v), _, _) => return Ok(v.clone()),
-        (_, Some(r), _) => Source::Ref {
-            reference: r.clone(),
-        },
-        (_, _, Some(c)) => Source::Command { command: c.clone() },
-        _ => bail!("needs a value, ref or command"),
-    };
+    if let Some(v) = &decl.value {
+        return Ok(v.clone());
+    }
+    let source = decl_source(decl).context("needs a value, ref or command")?;
     let entry = SecretEntry {
         service: "registry".into(),
         scope: "global".into(),
         source,
     };
     resolve(&entry, &*ctx.store)
+}
+
+/// `decl`'s reference, else its command.
+fn decl_source(decl: &SecretDecl) -> Option<Source> {
+    match (&decl.r#ref, &decl.command) {
+        (Some(r), _) => Some(Source::Ref {
+            reference: r.clone(),
+        }),
+        (_, Some(c)) => Some(Source::Command { command: c.clone() }),
+        _ => None,
+    }
 }
 
 /// What `secret set --sandbox` would take for `decl`: a snapshot becomes its value now; a
@@ -548,13 +538,7 @@ fn source<R: Runner>(
             ..Default::default()
         });
     }
-    let source = match (&decl.r#ref, &decl.command) {
-        (Some(r), _) => Source::Ref {
-            reference: r.clone(),
-        },
-        (_, Some(c)) => Source::Command { command: c.clone() },
-        _ => bail!("no value, ref or command"),
-    };
+    let source = decl_source(decl).context("no value, ref or command")?;
     let snapshot = decl.snapshot == Some(true);
     let resolved = if snapshot || decl.no_verify != Some(true) {
         let entry = SecretEntry {
