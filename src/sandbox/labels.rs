@@ -390,7 +390,8 @@ impl Meta {
                 .unwrap_or(0),
             version: text(VERSION).unwrap_or_default(),
             engine: Engine::from_label(labels.get(DOCKER).map(String::as_str)),
-            clone_repo: text(CLONE),
+            // Not a path (an older sandbox's `true`): no repo to touch.
+            clone_repo: text(CLONE).filter(|p| std::path::Path::new(p).is_absolute()),
             fork_of: text(FORK_OF),
             setup: text(SETUP),
             bridge: flag(BRIDGE),
@@ -552,6 +553,9 @@ mod tests {
         assert_eq!(labels["sbx.clone"], "/w");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.clone"));
+        let mut old = meta().to_labels();
+        old.insert("sbx.clone".into(), "true".into());
+        assert_eq!(Meta::from_labels(&old).unwrap().clone_repo, None);
         assert_eq!(
             Meta::from_labels(&meta().to_labels()).unwrap().clone_repo,
             None
