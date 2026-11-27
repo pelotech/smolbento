@@ -17,6 +17,10 @@ smolbento's machines stay apart from a smolvm you run yourself.
 All smolvm calls go through the `Runner` trait in `src/smolvm/`. The real runner parses smolvm's JSON
 output and errors. Tests swap in a fake runner and assert the exact smolvm command lines.
 
+Built-in agents are sbx's published kits, `docker.io/sbx/<agent>:latest`; `src/agents.rs` lists only
+their names. A kit change reaches users at their next create. The kit builder's image
+(`BUILDER_IMAGE`, the `shell` kit as a plain image) is pinned by digest; Renovate bumps it.
+
 Interactive commands (`run`, `exec -it`) pass the terminal straight to `smolvm machine exec`, so raw
 mode, resizes and colours work unchanged.
 
@@ -72,7 +76,7 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/templates.rs` | Saved templates |
 | `src/mcp/` | Registered MCP servers, and what `--static-mcp` applies at create |
 | `src/bridge/` | Host services: browser and clipboard shims, login relay, socket listener |
-| `src/host_service.rs` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets and run `_serve` per connection; the orphan sweep |
+| `src/host_service/` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets and run `_serve` per connection; the orphan sweep |
 | `src/ssh_agent/` | SSH agent forwarding: grants, label, filtering proxy |
 | `src/ssh/` | The `~/.ssh/config` block `setup ssh` manages; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |

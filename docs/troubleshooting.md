@@ -136,7 +136,7 @@ directories with the same name). The error suggests a name with the parent direc
 
 ```console
 $ bento run claude
-error: sandbox name "claude-infrastructure" is already used by workspace "/src/pelotech/infrastructure"; pass --name to choose a different name, such as --name claude-uki-code-infrastructure
+error: sandbox name "claude-infrastructure" is already used by workspace "/src/work/infrastructure"; pass --name to choose a different name, such as --name claude-oss-infrastructure
 ```
 
 Pass `--name`, or set `sandbox.autoName` to take the suggested name

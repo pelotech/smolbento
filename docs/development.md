@@ -18,8 +18,11 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 | `just build` | Build the binary |
 | `just test` | Unit, snapshot and sbx parity tests (nextest) |
 | `just e2e` | Real-VM tests, eight at a time (`just e2e 2` for fewer, on a smaller machine); `just e2e-shard 1` is one of CI's three shards, two at a time. Needs a hypervisor |
+| `just e2e-dhi` | The e2e test that builds from `dhi.io`; needs a Docker Hardened Images login (`SMOLBENTO_E2E_DHI_USER` and `SMOLBENTO_E2E_DHI_TOKEN_FILE`), so `just e2e` leaves it out |
+| `just conformance` | The kit spec's conformance suite against `tests/conformance` (see its README). Boots VMs |
 | `just smolvm-pin VERSION` | Pin smolvm `VERSION`: rewrite `smolvm.lock` from that release's checksums |
 | `just smolvm-lock-check` | Check `smolvm.lock` against its release (CI runs it) |
+| `just smolvm-fork BASE` | Point `crates/egress-front` at the fork tag for `BASE` (see [below](#egress-fronts-smolvm-crates)) |
 | `just demo` | Record the README demo (`docs/demo.tape`) into `dist/demo.gif`. Boots a VM; uses its own dirs, never yours |
 | `just demo-publish` | Replace the GIF the README shows (the `demo` release's asset) |
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
@@ -40,6 +43,8 @@ shows changes. The GIF stays out of git: only the tape is committed.
 - End-to-end tests (`tests/e2e/`, ignored by default) boot small Alpine VMs. They cover lifecycle,
   exec, mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy
   and secrets tests reach `httpbin.org`.
+- The `real_*_kit` e2e tests pull the real `claude` and `shell` kits; every other test uses
+  stand-ins (`SMOLBENTO_AGENT_KITS_DIR`).
 
 ## Running tests
 
@@ -87,6 +92,17 @@ e2e tests share the home `/tmp/sbt-e2e-<uid>`, apart from your own
   test uses that binary except `the_pinned_smolvm_runs_from_smolbentos_home`.
 - **Debug a test's VMs:** `SMOLBENTO_SMOLVM_HOME=/tmp/sbt-e2e-$(id -u) bento smolvm machine ls --json`.
 
+### egress-front's smolvm crates
+
+`crates/egress-front` takes smolvm's crates from a tag on the `josmo/smolvm` fork, made by
+`just smolvm-fork BASE` (the tag's name says its base). A smolvm bump doesn't need a new tag; one
+that egress-front needs newer smolvm-credentials code for does, and it updates the crate's `tag` and
+the flake hash.
+
+Fetching the smolvm git dependency may need `CARGO_NET_GIT_FETCH_WITH_CLI=true
+GIT_LFS_SKIP_SMUDGE=1`: a user git config can rewrite https to ssh, and smolvm's repo carries
+~800 MB of LFS the crate doesn't need.
+
 ## CI
 
 | Workflow | Runs on | Does |
@@ -100,6 +116,10 @@ e2e tests share the home `/tmp/sbt-e2e-<uid>`, apart from your own
 | `plan-nix-devshell` | PRs touching the flake | Comments the dev-shell package diff |
 | `Release Please` | main | Opens release PRs; on release, builds signed binaries for all targets |
 
+`e2e` runs as three shards (`just e2e-shard N`). The slowest tests are placed by hand
+(`e2e_heavy_*` in the justfile, kept in step with `.config/nextest.toml`), the rest by nextest's
+`--partition slice:N/3`. So an e2e test can't rely on another having run on the same machine.
+
 Runner time savings:
 
 - A new push cancels that PR's runs in progress. Runs on `main` queue, so every merged commit gets a
@@ -110,7 +130,8 @@ Runner time savings:
   `main` run slow.
 
 macOS isn't tested in CI: GitHub's Apple Silicon runners can't boot VMs. Before merging a change
-that affects macOS, or a release PR, run `just test` and `just e2e` on a Mac.
+that affects macOS, or a release PR, run `just test` and `just e2e` on a Mac. Hosted egress's Linux
+systemd units are tested in CI, and its macOS launchd units by running `just e2e` on a Mac.
 
 ## Releases
 

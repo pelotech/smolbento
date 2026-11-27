@@ -67,7 +67,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
 - Ports (`host.example.com:8080`) are enforced for hosted sandboxes, in allows and denies;
   `policy check` without a port checks 443. smolvm can't filter by port, so with
   `network.egress=smolvm` deny the host without a port ([sbx
-  compatibility](sbx-compatibility.md#differences-youll-notice)). `policy ls --wide` says in STATUS
+  compatibility](sbx-compatibility.md#network-and-secrets)). `policy ls --wide` says in STATUS
   which rules smolvm doesn't fully enforce.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
@@ -82,7 +82,7 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   mode unless the sandbox has host access, which a `localhost` allow rule gives at create; the check
   says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. Which UDP each egress
-  mode sends: [sbx compatibility](sbx-compatibility.md#differences-youll-notice).
+  mode sends: [Hosted egress](#hosted-egress).
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
   sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
   the connection's verdict; `policy ls --wide` shows the request rules.
@@ -161,11 +161,15 @@ When things take effect:
   hosts.
 - A new value for a bound service applies **at once** to running sandboxes (`secret set` says
   `Applied to … now`), from their next request, and to stopped ones at their **next start**.
-  Removing a secret (`secret rm`) still waits for the next start, and so does a new value for a
-  sandbox an earlier smolbento made, when a kit gave it the service's credential.
-- A secret for a service the sandbox wasn't created with needs a **recreate** on a hosted sandbox
-  (the default), and `secret set` tells you which. With `network.egress=smolvm` it's bound to a
-  running sandbox at once, or from the next start of one that booted with no secrets.
+  Removing a secret (`secret rm`) applies at once to running sandboxes too: they get the entry that
+  still applies (the global one, or a fork's original's), else a fixed non-secret value. A new value
+  for a sandbox an earlier smolbento made, when a kit gave it the service's credential, waits for
+  the next start.
+- A secret for a service the sandbox wasn't created with is bound **at once** to a running hosted
+  sandbox (the default): its egress process restarts, so open connections drop, and commands
+  started afterwards see the variable. With `network.egress=smolvm` it's bound to a running sandbox
+  at once, or from the next start of one that booted with no secrets. A stopped sandbox gets it at
+  its next start.
 
 ### Hosted egress
 
@@ -239,8 +243,6 @@ gist.github.com:443: …`). `bento rm` removes the log with the sandbox.
 A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its parent's
 CA and token: the copied guest already trusts that CA and holds those placeholders. It keeps the
 parent's sandbox rules, as every fork does.
-
-The Linux systemd units are tested in CI, and the macOS launchd units by running `just e2e` on a Mac.
 
 #### Request rules
 
