@@ -19,12 +19,12 @@ An environment variable beats the config file, which beats the default. Booleans
 
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
-| `sandbox.autoName` | `SMOLBENTO_SANDBOX_AUTO_NAME` | `false` | When a default name belongs to another directory's sandbox, take the suggested `<agent>-<parent>-<directory>` name instead of refusing. smolbento only. See [Usage](usage.md). |
+| `sandbox.autoName` | `SMOLBENTO_SANDBOX_AUTO_NAME` | `false` | When a default name belongs to another directory's sandbox, take the suggested `<agent>-<parent>-<directory>` name instead of refusing. smolbento only. See [Run an agent](usage.md#run-an-agent). |
 | `sandbox.disk.dockerVolume` | `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` | (smolvm's default, 20 GiB) | Disk for Docker's data in new sandboxes, such as `30g`. smolvm keeps image layers on the same disk. An environment file's `dockerSize` wins. |
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Docker-enabled agent images, and a private Docker engine in each sandbox. Applies to sandboxes created afterwards. |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | (empty) | A smolvm to run instead of the release smolbento downloads, such as one you built. smolbento is tested with the downloaded one (`bento diagnose` names it). |
 | `smolvm.home` | `SMOLBENTO_SMOLVM_HOME` | `~/.smolbento` | Where smolvm keeps smolbento's sandboxes, and where the downloaded smolvm goes. `-` uses your smolvm's own default location. On macOS keep it short: smolvm's sockets inside it must fit in 103 bytes. |
-| `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Details](#details). |
+| `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Image cache](#image-cache). |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote. |
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `bento fork` can copy them. `false` also turns `bento fork` off. Applies from each sandbox's next start; see [Fork](usage.md#fork). |
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/","ghcr.io/pelotech/smolbento/"]` | Registry prefixes published kits may load from, as a JSON array. See [Kit sources](#kit-sources). |
@@ -34,40 +34,24 @@ An environment variable beats the config file, which beats the default. Booleans
 | `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker identities and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
 | `clipboard.textCopy` | `SMOLBENTO_CLIPBOARD_TEXT_COPY` | `false` | Let sandboxes copy text to your clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe` in the sandbox). See [Browser and clipboard](usage.md#browser-and-clipboard). |
-| `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
+| `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. Applies to each new connection. See [Browser and clipboard](usage.md#browser-and-clipboard). |
 | `network.egress` | `SMOLBENTO_NETWORK_EGRESS` | `hosted` | Who handles a sandbox's egress: `hosted` or `smolvm`. Some sandboxes fall back to `smolvm`, with a warning; recorded per sandbox at create. See [Hosted egress](network-and-secrets.md#hosted-egress). |
-| `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. See [SSH agent](usage.md#ssh-agent). |
-| `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses the user session's `SSH_AUTH_SOCK` (the `bento` client's, while attached). |
-| `ssh.knownHostsFile` | `SMOLBENTO_SSH_KNOWN_HOSTS_FILE` | `~/.ssh/known_hosts` | `known_hosts` file whose host keys decide which servers a kit's `ssh-agent@1` `authenticate` list admits. Read at each login. smolbento-only. |
+| `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. Checked at create and for each new agent connection: off at create means no agent until the sandbox is recreated. See [SSH agent](usage.md#ssh-agent). |
+| `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses the user session's `SSH_AUTH_SOCK` (the `bento` client's, while attached). It must name an existing socket; smolbento never starts an agent itself. |
+| `ssh.knownHostsFile` | `SMOLBENTO_SSH_KNOWN_HOSTS_FILE` | `~/.ssh/known_hosts` | `known_hosts` file whose host keys decide which servers a kit's `ssh-agent@1` `authenticate` list admits. Read at each login; a missing or unreadable file trusts no server. smolbento-only. See [SSH agent grant](kits.md#ssh-agent-grant). |
 | `env.rememberHostCommands` | `SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS` | `false` | Keep an approval of an environment file's host commands until they change. Otherwise `bento env create` and `bento env run` ask every time. |
-| `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | Default for a sandbox created without `--skills`: `off`, `readonly` or `readwrite`. See [Details](#details). |
+| `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | Default for a sandbox created without `--skills`: `off`, `readonly` or `readwrite`. See [Skills](kits.md#sharing-the-store-with-a-sandbox). |
 
 The `SMOLBENTO_*` names are smolbento's own; sbx has no per-setting variables.
 
-### Details
+### Image cache
 
-**`smolvm.image-cache-size`** caps smolvm's image seed cache (`~/Library/Caches/smolvm/image-seeds`
+`smolvm.image-cache-size` caps smolvm's image seed cache (`~/Library/Caches/smolvm/image-seeds`
 on macOS, `~/.cache/smolvm/image-seeds` on Linux). The first sandbox of an image fills it, so later
 sandboxes of that image start in seconds without a pull. Past the cap, the least recently used
 images go first, and the next sandbox of an evicted image pulls again. An agent image takes about
 2 to 3 GB. Sizes take `k`, `m`, `g` or `t` (`60g`, `1t`). Zero is refused. If you set smolvm's own
 `SMOLVM_IMAGE_SEED_MAX_BYTES`, it wins. smolvm checks the cap when it adds an image.
-
-**`browser.enabled`** applies to each new connection (the service unit reads settings per connection). Copying to your clipboard isn't
-affected. See [Browser and clipboard](usage.md#browser-and-clipboard).
-
-**`ssh.agentForwardingEnabled` and `ssh.agentSocketPath`** are checked when a sandbox is created and
-again for each new agent connection from it. If forwarding is off, or there's no agent, at create,
-the sandbox gets none until it's recreated. A kit that requires an agent refuses the create in that
-case. `ssh.agentSocketPath` must name an existing socket; smolbento never starts an agent itself.
-
-**`ssh.knownHostsFile`** is read each time a sandbox asks the agent to log in, so edits apply to the
-next login. A missing or unreadable file means no server is trusted and logins are refused. See
-[SSH agent](usage.md#ssh-agent).
-
-**`skills.defaultMode`** applies when a sandbox is created and neither `--skills` nor
-`sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with. See
-[Skills](kits.md#skills).
 
 ### Kit sources
 
@@ -141,8 +125,8 @@ Sign a kit with `bento kit sign --help`.
 | `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge\|egress>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge\|egress>.socket` and `…@.service` (`….service` for egress) (Linux) | [Host service](usage.md#host-services) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
-`bento setup ssh` also edits one file outside these directories: `~/.ssh/config`, between its
-`# >>> smolbento (managed) >>>` markers only. smolbento keeps no SSH host key or known-hosts file.
+`bento setup ssh` also edits one file outside these directories: `~/.ssh/config`, in its managed
+block ([SSH](sbx-compatibility.md#ssh)). smolbento keeps no SSH host key or known-hosts file.
 
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured, also on macOS.
 `SMOLBENTO_CONFIG_DIR`, `SMOLBENTO_CACHE_DIR` and `SMOLBENTO_DATA_DIR` override them. An empty
