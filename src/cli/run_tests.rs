@@ -750,11 +750,24 @@ fn mount_on_an_existing_sandbox_is_warned_about_and_attaches() {
         let Some(super::super::Cmd::Run(a)) = cli.command else {
             panic!("run");
         };
-        super::ignored_mount_warning(&a, "s1")
+        super::ignored_options_warning(&a, "s1")
     };
     assert_eq!(
         warning(&["run", "--name", "s1", "--mount", ".:/home/agent/x"]).as_deref(),
         Some("warning: --mount only applies when a sandbox is created; s1 already exists")
+    );
+    assert_eq!(
+        warning(&[
+            "run",
+            "--name",
+            "s1",
+            "--cpus",
+            "2",
+            "--mount",
+            ".:/home/agent/x"
+        ])
+        .as_deref(),
+        Some("warning: --cpus, --mount only apply when a sandbox is created; s1 already exists")
     );
     assert_eq!(warning(&["run", "--name", "s1"]), None);
 
