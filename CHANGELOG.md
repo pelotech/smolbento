@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.42.0](https://github.com/pelotech/smolbento/compare/v0.41.4...v0.42.0) (2026-11-27)
+
+
+### Features
+
+* **kits:** follow the kit spec at 7c8b7cd, checking clipboard@1 configs ([#297](https://github.com/pelotech/smolbento/issues/297)) ([d8ac0a6](https://github.com/pelotech/smolbento/commit/d8ac0a6aad3478ecfc9cbe30e33de04eb7cf47ef))
+
+
+### Bug Fixes
+
+* **kits:** a required credential with no secret fails the create ([#295](https://github.com/pelotech/smolbento/issues/295)) ([0ed4912](https://github.com/pelotech/smolbento/commit/0ed4912e4a43f8172e9363e7b0a1f1ca90026fc0))
+* **kits:** a whole kit.env reference stays text ([#298](https://github.com/pelotech/smolbento/issues/298)) ([ac6a20f](https://github.com/pelotech/smolbento/commit/ac6a20f85c53f77810dfa96a87b81c7ded602600))
+* **kits:** agent context follows the kit spec's budget, profiles and guidance ([#299](https://github.com/pelotech/smolbento/issues/299)) ([fa200b1](https://github.com/pelotech/smolbento/commit/fa200b1f2169d422264d2d99cb4517352f343718))
+* **kits:** resources@1 takes the largest value any kit states ([#293](https://github.com/pelotech/smolbento/issues/293)) ([7dc734e](https://github.com/pelotech/smolbento/commit/7dc734efab1acc1ae8a3fbca005a00648939fc64))
+
+
+### Chores
+
+* **main:** release nix-kit 0.3.1 ([#306](https://github.com/pelotech/smolbento/issues/306)) ([8717412](https://github.com/pelotech/smolbento/commit/8717412ef269eaeedaed861c8498c43262f9fecb))
+
+
+### Docs
+
+* **conformance:** what selection records need ([#300](https://github.com/pelotech/smolbento/issues/300)) ([714cccc](https://github.com/pelotech/smolbento/commit/714cccc1fcb3cbc628d1f1ff29116858f6fa89ac))
+* one job per page: fold comparison and development status in ([#301](https://github.com/pelotech/smolbento/issues/301)) ([8458cb3](https://github.com/pelotech/smolbento/commit/8458cb3b0a96b017bf968592b61b4ab24d155a03))
+* smolvm egress doesn't follow the kit spec's network rules ([#294](https://github.com/pelotech/smolbento/issues/294)) ([b9d1c02](https://github.com/pelotech/smolbento/commit/b9d1c02697cbbeafd2a109b322b11c6aa3f02d22))
+* tighten the guides; fine print moves to reference ([#302](https://github.com/pelotech/smolbento/issues/302)) ([061cc91](https://github.com/pelotech/smolbento/commit/061cc9118ddcea72e46fdf3abd3264a84301e335))
+* tighten the reference pages ([#303](https://github.com/pelotech/smolbento/issues/303)) ([449d03d](https://github.com/pelotech/smolbento/commit/449d03d9259464f6bb28e956b75b2e816af641e7))
+
 ## [0.41.4](https://github.com/pelotech/smolbento/compare/v0.41.3...v0.41.4) (2026-11-26)
 
 
