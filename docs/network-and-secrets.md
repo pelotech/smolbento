@@ -244,8 +244,6 @@ A fork of a hosted sandbox gets its own egress process on its own port, with a c
 CA and token: the copied guest already trusts that CA and holds those placeholders. It keeps the
 parent's sandbox rules, as every fork does.
 
-The Linux systemd units are tested in CI, and the macOS launchd units by running `just e2e` on a Mac.
-
 #### Request rules
 
 A rule with `--method`, `--path` or `--query`, or a kit's `network-policy@2` entry with `methods` or
