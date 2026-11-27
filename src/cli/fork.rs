@@ -309,8 +309,7 @@ mod tests {
             &t,
             "running",
             &[
-                ("sbx.clone", "true"),
-                ("sbx.workspace", &r),
+                ("sbx.clone", &r),
                 ("sbx.workspaces", &ws),
                 ("sbx.auto-ports", "40001:80"),
             ],
@@ -325,15 +324,7 @@ mod tests {
         let mut t = test_env(&[]);
         let (_d, repo) = temp_repo();
         let (r, ws) = clone_labels(&repo);
-        parent(
-            &t,
-            "running",
-            &[
-                ("sbx.clone", "true"),
-                ("sbx.workspace", &r),
-                ("sbx.workspaces", &ws),
-            ],
-        );
+        parent(&t, "running", &[("sbx.clone", &r), ("sbx.workspaces", &ws)]);
         assert_eq!(t.sbt(&["fork", "a"]).unwrap(), 0);
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
         assert_eq!(remote(&repo, "a-fork-1", "url"), "file:///sbt/a-fork-1");
@@ -500,7 +491,7 @@ mod tests {
     fn refusals_make_no_branch() {
         let cases: [Refusal; 4] = [
             (
-                &[("sbx.workspace", "/w/p"), ("sbx.workspaces", "[\"/w/p\"]")],
+                &[("sbx.workspaces", "[\"/w/p\"]")],
                 &["fork", "a"],
                 "fork needs a sandbox with no writable host folder; create it with --clone",
             ),
@@ -582,15 +573,7 @@ mod tests {
                 "https://example.com/x.git",
             ],
         );
-        parent(
-            &t,
-            "running",
-            &[
-                ("sbx.clone", "true"),
-                ("sbx.workspace", &r),
-                ("sbx.workspaces", &ws),
-            ],
-        );
+        parent(&t, "running", &[("sbx.clone", &r), ("sbx.workspaces", &ws)]);
         let err = t.sbt(&["fork", "a"]).unwrap_err();
         assert!(err.to_string().contains("already has a remote"), "{err:#}");
         assert!(branches(&t).is_empty());
@@ -602,15 +585,7 @@ mod tests {
         let (_d, repo) = temp_repo();
         let (r, _) = clone_labels(&repo);
         let ws = serde_json::to_string(&[r.clone(), "/w/docs:ro".into()]).unwrap();
-        parent(
-            &t,
-            "running",
-            &[
-                ("sbx.clone", "true"),
-                ("sbx.workspace", &r),
-                ("sbx.workspaces", &ws),
-            ],
-        );
+        parent(&t, "running", &[("sbx.clone", &r), ("sbx.workspaces", &ws)]);
         t.sbt(&["fork", "a"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
 
@@ -690,11 +665,7 @@ mod tests {
         deny_rule_policy(&t);
         let (_d, repo) = temp_repo();
         let (r, ws) = clone_labels(&repo);
-        let clone = [
-            ("sbx.clone", "true"),
-            ("sbx.workspace", r.as_str()),
-            ("sbx.workspaces", ws.as_str()),
-        ];
+        let clone = [("sbx.clone", r.as_str()), ("sbx.workspaces", ws.as_str())];
         parent(&t, "running", &clone);
         t.runner()
             .fail(&["machine", "branch"], "SMOLVM_ERROR", "boom");

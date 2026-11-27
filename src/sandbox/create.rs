@@ -410,7 +410,6 @@ mod tests {
         let spec = spec(&req);
         assert_eq!(spec.name, "sbx-claude_repo");
         assert_eq!(spec.labels["sbx.name"], "claude.repo");
-        assert_eq!(spec.labels["sbx.workspace"], "/w/repo");
         assert_eq!(spec.labels["sbx.docker"], "true");
         let mounts = flag_values(&spec.to_args(), "-v");
         assert_eq!(
@@ -540,25 +539,11 @@ mod tests {
         );
         // The clone isn't there until the first start, so the workload starts in the volume.
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
-        assert_eq!(spec.labels["sbx.clone"], "true");
-        assert_eq!(spec.labels["sbx.clone-top"], "/w/repo");
-        assert_eq!(spec.labels["sbx.workspace"], "/w/repo/sub");
-    }
-
-    #[test]
-    fn clone_at_the_repo_top_has_no_clone_top_label() {
-        let ws = vec![Workspace {
-            path: "/w/repo".into(),
-            read_only: false,
-        }];
-        let mut req = request(false, ws);
-        req.clone = Some(CloneSource {
-            top: "/w/repo".into(),
-            git_dir: "/w/repo/.git".into(),
-        });
-        let spec = spec(&req);
-        assert_eq!(spec.labels["sbx.clone"], "true");
-        assert!(!spec.labels.contains_key("sbx.clone-top"));
+        assert_eq!(spec.labels["sbx.clone"], "/w/repo");
+        assert_eq!(
+            spec.labels["sbx.workspaces"],
+            r#"["/w/repo/sub","/w/docs:ro"]"#
+        );
     }
 
     #[test]
@@ -566,7 +551,7 @@ mod tests {
         let spec = spec(&request(false, vec![]));
         assert!(spec.mounts.is_empty());
         assert_eq!(spec.workdir, None);
-        assert!(!spec.labels.contains_key("sbx.workspace"));
+        assert_eq!(spec.labels["sbx.workspaces"], "[]");
         assert_eq!(spec.labels["sbx.docker"], "false");
     }
 

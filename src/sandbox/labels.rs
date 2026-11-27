@@ -4,7 +4,6 @@ use crate::ssh_agent::AgentLabel;
 
 pub const NAME: &str = "sbx.name";
 pub const AGENT: &str = "sbx.agent";
-pub const WORKSPACE: &str = "sbx.workspace";
 pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
 /// The sandbox's `SANDBOX_ID`, minted at create: kept across restarts, new for a new sandbox.
@@ -21,7 +20,6 @@ pub const REGISTRIES: &str = "sbx.registries";
 /// a start picks new ones, as sbx does.
 pub const AUTO_PORTS: &str = "sbx.auto-ports";
 pub const CLONE: &str = "sbx.clone";
-pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
 /// The setup that created it (`host_service::namespace`): policy changes reach only their own setup's
 /// sandboxes, though setups can share a smolvm home. A fork inherits it.
@@ -261,7 +259,7 @@ impl Engine {
 pub struct Meta {
     pub name: String,
     pub agent: String,
-    /// Primary workspace; `None` for a mountless sandbox.
+    /// Primary workspace, the first of `workspaces`; `None` for a mountless sandbox. Not a label.
     pub workspace: Option<String>,
     /// Every mounted workspace, primary first, as `path` or `path:ro`.
     pub workspaces: Vec<String>,
@@ -273,9 +271,7 @@ pub struct Meta {
     pub engine: Engine,
     /// What the `CreateRequest` gave, recorded unchanged.
     pub rec: Recorded,
-    /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
-    /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
-    /// given).
+    /// `--clone`: the host repo's top, which is also the clone's path in the guest (`sbx.clone`).
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
@@ -313,19 +309,13 @@ impl Meta {
         ]);
         // Everything else is written only when set, so a sandbox's labels don't change when a
         // field it doesn't use is added. Kit labels exist only on sandboxes created with kits.
-        let clone_top = self
-            .clone_repo
-            .as_ref()
-            .filter(|top| Some(*top) != self.workspace.as_ref());
         let optional = [
-            (WORKSPACE, self.workspace.clone()),
             (SECRETS, list(&self.rec.secrets)),
             (CREDENTIAL_HOSTS, list(&self.rec.credential_hosts)),
             (CREDENTIAL_ENV, list(&self.rec.credential_env)),
             (REGISTRIES, list(&self.rec.registries)),
             (AUTO_PORTS, list(&self.rec.auto_ports)),
-            (CLONE, flag(self.clone_repo.is_some())),
-            (CLONE_TOP, clone_top.cloned()),
+            (CLONE, self.clone_repo.clone()),
             (FORK_OF, self.fork_of.clone()),
             (SETUP, self.setup.clone()),
             (
@@ -388,20 +378,19 @@ impl Meta {
         let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
         let egress = text(EGRESS).and_then(|j| crate::egress::Label::from_label(&j));
         let egress_unreadable = labels.contains_key(EGRESS) && egress.is_none();
+        let workspaces: Vec<String> = json(labels, WORKSPACES).unwrap_or_default();
         Some(Meta {
             name: labels.get(NAME)?.clone(),
             agent: text(AGENT).unwrap_or_default(),
-            workspace: text(WORKSPACE),
-            workspaces: json(labels, WORKSPACES).unwrap_or_default(),
+            workspace: (workspaces.first()).map(|w| w.strip_suffix(":ro").unwrap_or(w).to_string()),
+            workspaces,
             created: labels
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             version: text(VERSION).unwrap_or_default(),
             engine: Engine::from_label(labels.get(DOCKER).map(String::as_str)),
-            clone_repo: flag(CLONE)
-                .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
-                .flatten(),
+            clone_repo: text(CLONE),
             fork_of: text(FORK_OF),
             setup: text(SETUP),
             bridge: flag(BRIDGE),
@@ -455,11 +444,6 @@ impl Meta {
 
     /// A mounted host folder the sandbox can write: a copy would share it with the original.
     pub fn writable_host_folder(&self) -> bool {
-        // A workspace label without a readable list (an empty or garbled `sbx.workspaces`) still
-        // names a folder; assume it's writable.
-        if self.workspaces.is_empty() && self.clone_repo.is_none() && self.workspace.is_some() {
-            return true;
-        }
         self.workspaces
             .iter()
             .enumerate()
@@ -536,35 +520,36 @@ mod tests {
     fn round_trip() {
         let labels = meta().to_labels();
         assert_eq!(labels["sbx.workspaces"], r#"["/w/repo","/w/docs:ro"]"#);
+        assert!(!labels.contains_key("sbx.workspace"));
         assert_eq!(labels["sbx.docker"], "true");
         assert_eq!(Meta::from_labels(&labels), Some(meta()));
     }
 
     #[test]
-    fn mountless_has_no_workspace_label() {
+    fn the_workspace_is_the_first_of_the_workspaces() {
+        let mut labels = meta().to_labels();
+        labels.insert("sbx.workspaces".into(), r#"["/w/a:ro","/w/b"]"#.into());
+        let m = Meta::from_labels(&labels).unwrap();
+        assert_eq!(m.workspace.as_deref(), Some("/w/a"));
+    }
+
+    #[test]
+    fn mountless_has_no_workspace() {
         let m = Meta {
             workspace: None,
             workspaces: vec![],
             ..meta()
         };
-        let labels = m.to_labels();
-        assert!(!labels.contains_key("sbx.workspace"));
-        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert_eq!(Meta::from_labels(&m.to_labels()), Some(m));
     }
 
     #[test]
     fn clone_labels_round_trip() {
-        // At the repo top: no `sbx.clone-top`, the workspace is the top.
+        // A subdirectory was given: the label is the repo's top, not the workspace.
         let mut m = meta();
-        m.clone_repo = Some("/w/repo".into());
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.clone"], "true");
-        assert!(!labels.contains_key("sbx.clone-top"));
-        assert_eq!(Meta::from_labels(&labels), Some(m.clone()));
-        // A subdirectory was given: the top is its own label.
         m.clone_repo = Some("/w".into());
         let labels = m.to_labels();
-        assert_eq!(labels["sbx.clone-top"], "/w");
+        assert_eq!(labels["sbx.clone"], "/w");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.clone"));
         assert_eq!(
@@ -681,7 +666,7 @@ mod tests {
         assert_eq!(Meta::from_labels(&labels), Some(m));
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
-        assert_eq!(plain.len(), 7, "{plain:?}");
+        assert_eq!(plain.len(), 6, "{plain:?}");
     }
 
     #[test]
@@ -768,33 +753,5 @@ mod tests {
             ..mountless.clone()
         };
         assert!(!fork.forkable());
-    }
-
-    #[test]
-    fn a_workspace_without_a_readable_list_counts_as_writable() {
-        let from = |workspaces: Option<&str>| {
-            let mut labels = BTreeMap::from([
-                (NAME.to_string(), "a".to_string()),
-                (WORKSPACE.to_string(), "/w/p".to_string()),
-            ]);
-            if let Some(w) = workspaces {
-                labels.insert(WORKSPACES.to_string(), w.to_string());
-            }
-            Meta::from_labels(&labels).unwrap()
-        };
-        for w in [None, Some(""), Some("[]"), Some("not json")] {
-            assert!(
-                from(w).writable_host_folder() && !from(w).forkable(),
-                "{w:?}"
-            );
-        }
-        assert!(from(Some("[\"/w/p:ro\"]")).forkable());
-        // A clone's workspace is its own copy, whatever the list says.
-        let labels = BTreeMap::from([
-            (NAME.to_string(), "a".to_string()),
-            (WORKSPACE.to_string(), "/w/p".to_string()),
-            (CLONE.to_string(), "true".to_string()),
-        ]);
-        assert!(Meta::from_labels(&labels).unwrap().forkable());
     }
 }

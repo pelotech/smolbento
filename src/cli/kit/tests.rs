@@ -1131,7 +1131,6 @@ fn add_indexes_a_mixin_context_beside_the_workspace() {
         &[
             ("sbx.agent", "claude"),
             ("sbx.agent-file", "/w/CLAUDE.md"),
-            ("sbx.workspace", "/w/proj"),
             ("sbx.workspaces", r#"["/w/proj"]"#),
         ],
         &base(),
@@ -1197,7 +1196,6 @@ fn add_drops_a_mixin_context_when_the_workload_has_no_agent_file() {
             &[
                 ("sbx.agent", agent),
                 ("sbx.command", r#"["/bin/agent"]"#),
-                ("sbx.workspace", "/w/proj"),
                 ("sbx.workspaces", r#"["/w/proj"]"#),
             ],
             &base(),

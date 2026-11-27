@@ -193,7 +193,11 @@ impl TestEnv {
 
     /// Sandbox `claude-proj`, running, with workspace `/w/proj`.
     pub fn running_proj(&self) -> &FakeRunner {
-        self.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")])
+        self.sandbox(
+            "claude-proj",
+            "running",
+            &[("sbx.workspaces", r#"["/w/proj"]"#)],
+        )
     }
 
     /// Sandbox `name` is missing until the command creates it, then exists as `created`.
@@ -204,20 +208,20 @@ impl TestEnv {
 
     /// Sandbox `claude-proj`, whose workspace is the cwd.
     pub fn project(&self, state: &str) -> &FakeRunner {
-        let ws = self.ctx.cwd.display().to_string();
+        let ws = workspaces_label(&[&self.ctx.cwd.display().to_string()]);
         self.sandbox("claude-proj", state, &Self::project_labels(&ws))
     }
 
     /// `claude-proj` is missing until the command creates it, then exists as `created`.
     pub fn project_creatable(&self) -> &FakeRunner {
-        let ws = self.ctx.cwd.display().to_string();
+        let ws = workspaces_label(&[&self.ctx.cwd.display().to_string()]);
         self.creatable("claude-proj", &Self::project_labels(&ws))
     }
 
     fn project_labels(ws: &str) -> [(&str, &str); 3] {
         [
             ("sbx.agent", "claude"),
-            ("sbx.workspace", ws),
+            ("sbx.workspaces", ws),
             (
                 "sbx.command",
                 r#"["claude","--dangerously-skip-permissions"]"#,
@@ -331,6 +335,11 @@ pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> Stri
     .to_string()
 }
 
+/// An `sbx.workspaces` label value listing `paths`.
+pub fn workspaces_label(paths: &[&str]) -> String {
+    serde_json::to_string(paths).unwrap()
+}
+
 /// `machine status --json` output for sandbox `name`: `sbx.name`, `labels`, and `sbx.command` =
 /// `["bash"]` unless `labels` give one.
 pub fn sandbox_json(name: &str, state: &str, labels: &[(&str, &str)]) -> String {
@@ -393,7 +402,7 @@ fn probe(
     socket: fn(&str) -> std::path::PathBuf,
 ) -> (String, Seen) {
     let name = format!("{kind}-{}-{tag}", std::process::id());
-    let mut labels = vec![("sbx.agent", "shell"), ("sbx.workspace", "/w/proj")];
+    let mut labels = vec![("sbx.agent", "shell"), ("sbx.workspaces", r#"["/w/proj"]"#)];
     labels.extend(label);
     // Later registrations win: the catch-all goes first.
     t.runner().ok(&["machine"], "");
