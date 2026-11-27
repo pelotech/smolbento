@@ -197,7 +197,7 @@ mod tests {
             "running",
             &[
                 ("sbx.name", "tool-proj"),
-                ("sbx.workspace", "/w/proj"),
+                ("sbx.workspaces", r#"["/w/proj"]"#),
                 ("sbx.user", "somebody"),
             ],
         );

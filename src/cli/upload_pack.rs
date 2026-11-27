@@ -60,8 +60,8 @@ mod tests {
             state,
             &[
                 ("sbx.agent", "shell"),
-                ("sbx.workspace", "/w/r"),
-                ("sbx.clone", "true"),
+                ("sbx.workspaces", r#"["/w/r"]"#),
+                ("sbx.clone", "/w/r"),
             ],
         );
     }
@@ -119,8 +119,8 @@ mod tests {
             "running",
             &[
                 ("sbx.agent", "shell"),
-                ("sbx.workspace", "/w/r"),
-                ("sbx.clone", "true"),
+                ("sbx.workspaces", r#"["/w/r"]"#),
+                ("sbx.clone", "/w/r"),
                 ("sbx.user", "somebody:1001"),
             ],
         );
@@ -226,7 +226,7 @@ mod tests {
         t.machine(
             "sbx-box",
             "running",
-            &[("sbx.name", "box"), ("sbx.workspace", "/w/r")],
+            &[("sbx.name", "box"), ("sbx.workspaces", r#"["/w/r"]"#)],
         );
         let err = t.sbt_err(&["_upload-pack", "box"]);
         assert!(err.contains("isn't a clone sandbox"), "{err}");

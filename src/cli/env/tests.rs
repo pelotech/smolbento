@@ -136,7 +136,7 @@ fn create_binds_the_mounts_of_the_file() {
         &[
             ("sbx.name", "shell-proj"),
             ("sbx.agent", "shell"),
-            ("sbx.workspace", ws.as_str()),
+            ("sbx.workspaces", &workspaces_label(&[&ws])),
         ],
     );
     t.runner().missing_until_created("sbx-shell-proj");

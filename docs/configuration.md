@@ -152,7 +152,7 @@ name turned into `_`). Its details are stored as labels on that machine. The cor
 |---|---|
 | `sbx.name` | Sandbox name |
 | `sbx.agent` | Agent it was created for |
-| `sbx.workspace` | Primary workspace path (absent for a sandbox without one) |
+| `sbx.workspaces` | Workspace paths as a JSON list, primary first, `:ro` on read-only ones |
 | `sbx.created` | Creation time, unix seconds |
 | `sbx.id` | The sandbox's `SANDBOX_ID`, a UUID made at create (a fork gets its own) |
 | `sbx.kits` | Kits applied at create, pinned to their digests |

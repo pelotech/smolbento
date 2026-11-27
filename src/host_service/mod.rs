@@ -21,6 +21,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::config::Paths;
+use crate::smolvm::locate::MACOS_SOCKET_LIMIT;
 use crate::util::hex;
 
 /// What a unit serves.
@@ -136,9 +137,6 @@ fn lock(path: &Path) -> Option<File> {
     (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
 }
 
-/// Socket paths must be shorter than this: macOS caps them at 104 bytes including the NUL.
-const MAX_SOCKET_PATH: usize = 104;
-
 impl HostServices {
     /// This host's service manager (launchd on macOS, `systemd --user` on Linux), if it has one
     /// and `env` locates its directories; else units are off.
@@ -242,8 +240,8 @@ impl HostServices {
     /// Whether this host has a service manager and `name`'s sockets fit the OS path limit.
     pub fn fits(&self, name: &str) -> bool {
         self.usable()
-            && self.socket_path(name, Kind::Bridge).as_os_str().len() < MAX_SOCKET_PATH
-            && self.socket_path(name, Kind::Agent).as_os_str().len() < MAX_SOCKET_PATH
+            && self.socket_path(name, Kind::Bridge).as_os_str().len() <= MACOS_SOCKET_LIMIT
+            && self.socket_path(name, Kind::Agent).as_os_str().len() <= MACOS_SOCKET_LIMIT
     }
 
     /// The sockets a new sandbox `name` gets, or `None` (served while attached, as before) when

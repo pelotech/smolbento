@@ -7,7 +7,6 @@
     "sbx.created": "1793026356",
     "sbx.docker": "true",
     "sbx.name": "claude-myrepo",
-    "sbx.workspace": "/Users/dev/myrepo",
     "sbx.workspaces": "[\"/Users/dev/myrepo\"]"
   },
   "name": "sbx-claude-myrepo",

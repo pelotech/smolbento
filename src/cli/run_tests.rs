@@ -44,12 +44,12 @@ fn workdir_starts_the_session_in_a_directory_of_the_workspace() {
     }
 }
 
-/// The labels of a sandbox running `claude` with workspace `ws`.
+/// The labels of a sandbox running `claude` with the `sbx.workspaces` label `ws`.
 fn claude_in(ws: &str) -> [(&str, &str); 3] {
     [
         ("sbx.agent", "claude"),
         ("sbx.command", r#"["claude"]"#),
-        ("sbx.workspace", ws),
+        ("sbx.workspaces", ws),
     ]
 }
 
@@ -60,8 +60,12 @@ fn run_reuses_this_folders_sandbox_under_another_name() {
     let mut t = test_env(&[]);
     let ws = t.ctx.cwd.display().to_string();
     t.sandboxes(&[
-        ("claude-proj-2", "running", &claude_in(&ws)),
-        ("claude-proj", "running", &claude_in("/other/proj")),
+        (
+            "claude-proj-2",
+            "running",
+            &claude_in(&workspaces_label(&[&ws])),
+        ),
+        ("claude-proj", "running", &claude_in(r#"["/other/proj"]"#)),
     ]);
     t.runner().interactive_exit(0);
     t.sbt(&["run", "claude"]).unwrap();
@@ -76,7 +80,7 @@ fn run_reuses_this_folders_sandbox_under_another_name() {
 #[test]
 fn run_refuses_a_default_name_another_folder_uses_and_suggests_one() {
     let mut t = test_env(&[]);
-    t.sandboxes(&[("claude-proj", "running", &claude_in("/other/proj"))]);
+    t.sandboxes(&[("claude-proj", "running", &claude_in(r#"["/other/proj"]"#))]);
     let err = t.sbt_err(&["run", "claude"]);
     assert!(
         err.starts_with(
@@ -459,8 +463,11 @@ fn clone_sandbox(t: &TestEnv, ws: &std::path::Path) {
             ("sbx.name", "claude-proj"),
             ("sbx.agent", "claude"),
             ("sbx.command", r#"["claude"]"#),
-            ("sbx.workspace", &ws.display().to_string()),
-            ("sbx.clone", "true"),
+            (
+                "sbx.workspaces",
+                &workspaces_label(&[&ws.display().to_string()]),
+            ),
+            ("sbx.clone", &ws.display().to_string()),
         ],
     );
 }
@@ -521,11 +528,11 @@ fn fetch_on_exit_needs_a_clone_and_the_setting() {
 }
 
 fn kit_sandbox(t: &TestEnv, long_running: bool) {
-    let ws = t.ctx.cwd.display().to_string();
+    let ws = workspaces_label(&[&t.ctx.cwd.display().to_string()]);
     let mut labels = vec![
         ("sbx.name", "toolbox-proj"),
         ("sbx.agent", "toolbox"),
-        ("sbx.workspace", ws.as_str()),
+        ("sbx.workspaces", ws.as_str()),
         ("sbx.command", r#"["/bin/agent","--x"]"#),
     ];
     if long_running {
@@ -561,7 +568,7 @@ fn image_user_sandbox(t: &TestEnv) {
         &[
             ("sbx.name", "toolbox-proj"),
             ("sbx.agent", "toolbox"),
-            ("sbx.workspace", ws.as_str()),
+            ("sbx.workspaces", &workspaces_label(&[&ws])),
             ("sbx.command", r#"["/bin/agent","--x"]"#),
             ("sbx.user", "somebody"),
         ],
@@ -599,7 +606,7 @@ fn run_launches_a_numeric_image_user_as_given() {
         &[
             ("sbx.name", "toolbox-proj"),
             ("sbx.agent", "toolbox"),
-            ("sbx.workspace", ws.as_str()),
+            ("sbx.workspaces", &workspaces_label(&[&ws])),
             ("sbx.command", r#"["/bin/agent"]"#),
             ("sbx.user", "1000"),
         ],
@@ -722,7 +729,7 @@ fn attaching_with_a_workload_kit_target_loads_nothing() {
             &[
                 ("sbx.name", sandbox),
                 ("sbx.agent", "kit"),
-                ("sbx.workspace", ws.as_str()),
+                ("sbx.workspaces", &workspaces_label(&[&ws])),
                 ("sbx.command", r#"["/bin/agent"]"#),
             ],
         );

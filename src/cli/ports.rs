@@ -42,12 +42,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
             sb = sandbox::get(&ctx.vm, &a.sandbox)?;
         }
     }
-    if !publish.is_empty() {
-        ctx.vm.publish(&sb.machine, &publish)?;
-    }
-    if !unpublish.is_empty() {
-        ctx.vm.unpublish(&sb.machine, &unpublish)?;
-    }
     // The picked ones are picked again at each start, as sbx: recorded until unpublished.
     let gone: Vec<String> = unpublish.iter().map(PortMap::arg).collect();
     let mut auto: Vec<String> = (sb.meta.rec.auto_ports.iter())
@@ -59,6 +53,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
             .filter(|(spec, _)| options::picks_host(spec))
             .map(|(_, p)| p.arg()),
     );
+    ctx.vm.update(&sb.machine, &unpublish, &publish, &[])?;
+    // Its own update: the machine may be running (see `Smolvm::update`).
     if auto != sb.meta.rec.auto_ports {
         ctx.vm
             .set_label(&sb.machine, labels::AUTO_PORTS, &auto.join(","))?;
@@ -199,15 +195,26 @@ mod tests {
         let mut t = test_env(&[]);
         t.sandbox("a1", "running", &[("sbx.auto-ports", "40001:80")]);
         t.sbt(&["ports", "a1", "--publish", "81"]).unwrap();
-        let label = t.calls().last().unwrap().clone();
+        // Two updates: smolvm refuses ports and labels together on a running machine.
+        let calls = t.calls();
+        let [publish, label] = &calls[calls.len() - 2..] else {
+            unreachable!()
+        };
+        let port = publish
+            .strip_prefix("machine update -n sbx-a1 -p ")
+            .unwrap_or_else(|| panic!("{publish}"));
         let picked = label
             .strip_prefix("machine update -n sbx-a1 --label sbx.auto-ports=40001:80,")
             .unwrap_or_else(|| panic!("{label}"));
-        assert!(picked.ends_with(":81"), "{label}");
+        assert!(picked.ends_with(":81") && port == picked, "{calls:?}");
         t.sbt(&["ports", "a1", "--unpublish", "40001:80"]).unwrap();
+        let calls = t.calls();
         assert_eq!(
-            t.calls().last().unwrap(),
-            "machine update -n sbx-a1 --label sbx.auto-ports="
+            calls[calls.len() - 2..],
+            [
+                "machine update -n sbx-a1 --remove-port 40001:80",
+                "machine update -n sbx-a1 --label sbx.auto-ports=",
+            ]
         );
     }
 

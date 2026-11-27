@@ -18,7 +18,10 @@ fn create_clone_mounts_the_repo_and_adds_the_remote() {
         )),
         "{create}"
     );
-    assert!(create.contains("--label sbx.clone=true"), "{create}");
+    assert!(
+        create.contains(&format!("--label sbx.clone={}", root.display())),
+        "{create}"
+    );
     assert_eq!(
         git_config(&root, "remote.sandbox-claude-repo.uploadpack"),
         "smolbento _upload-pack claude-repo"
@@ -1155,10 +1158,11 @@ fn start_needs_a_policy() {
 /// Stopped clone-mode sandbox `box`, whose workspace is `repo`.
 fn clone_box(t: &TestEnv, repo: &std::path::Path) {
     let ws = repo.display().to_string();
+    let wss = workspaces_label(&[&ws]);
     let labels = [
         ("sbx.created", "999000"),
-        ("sbx.clone", "true"),
-        ("sbx.workspace", ws.as_str()),
+        ("sbx.clone", ws.as_str()),
+        ("sbx.workspaces", wss.as_str()),
     ];
     t.sandboxes(&[("box", "stopped", &labels)]);
 }
@@ -1223,10 +1227,10 @@ fn rm_removes_the_remote_from_the_repo_top_when_the_subdirectory_is_gone() {
     crate::workspace::clone::add_remote(&repo, "box").unwrap();
     let sub = repo.join("deleted").display().to_string();
     let top = repo.display().to_string();
+    let subs = workspaces_label(&[&sub]);
     let labels = [
-        ("sbx.clone", "true"),
-        ("sbx.workspace", sub.as_str()),
-        ("sbx.clone-top", top.as_str()),
+        ("sbx.clone", top.as_str()),
+        ("sbx.workspaces", subs.as_str()),
     ];
     t.sandboxes(&[("box", "stopped", &labels)]);
     t.sbt(&["rm", "-f", "box"]).unwrap();
@@ -1336,7 +1340,10 @@ fn rm_all_and_prune_leave_another_setups_sandboxes() {
 }
 
 /// The labels of a claude sandbox for another folder, `/other/proj`.
-const OTHER_FOLDERS: &[(&str, &str)] = &[("sbx.agent", "claude"), ("sbx.workspace", "/other/proj")];
+const OTHER_FOLDERS: &[(&str, &str)] = &[
+    ("sbx.agent", "claude"),
+    ("sbx.workspaces", r#"["/other/proj"]"#),
+];
 
 #[test]
 fn create_refuses_a_default_name_another_folder_uses() {

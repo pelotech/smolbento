@@ -70,7 +70,7 @@ pub(super) fn clone_sandbox() -> (Sandbox, StartPlan) {
     let sb = Sandbox {
         meta: Meta {
             name: "r".into(),
-            workspace: Some("/w/r".into()),
+            workspaces: vec!["/w/r".into()],
             clone_repo: Some("/w/r".into()),
             ..Default::default()
         },

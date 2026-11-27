@@ -3,7 +3,7 @@ use serde::Deserialize;
 use super::Output;
 
 /// An error smolvm reported with `--error-format json`.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, thiserror::Error)]
 #[error("smolvm: {message}")]
 pub struct SmolvmError {
     pub code: String,
@@ -12,27 +12,17 @@ pub struct SmolvmError {
 
 #[derive(Deserialize)]
 struct Envelope {
-    error: Body,
-}
-
-#[derive(Deserialize)]
-struct Body {
-    code: String,
-    message: String,
+    error: SmolvmError,
 }
 
 impl SmolvmError {
     /// The JSON error smolvm printed on stderr, if any.
     pub fn from_json(out: &Output) -> Option<Self> {
-        let Envelope { error } = out
-            .stderr
+        out.stderr
             .lines()
             .rev()
-            .find_map(|line| serde_json::from_str::<Envelope>(line.trim()).ok())?;
-        Some(Self {
-            code: error.code,
-            message: error.message,
-        })
+            .find_map(|line| serde_json::from_str::<Envelope>(line.trim()).ok())
+            .map(|e| e.error)
     }
 
     /// The smolvm error's message when `e` is one, else the whole error chain.

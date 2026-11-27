@@ -153,10 +153,23 @@ impl TestEnv {
     }
 
     /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`. It
-    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one.
+    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one, and
+    /// belongs to this setup unless they give an `sbx.setup`.
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
-        self.runner()
-            .ok(&["machine", "status"], &sandbox_json(name, state, labels))
+        self.runner().ok(
+            &["machine", "status"],
+            &self.sandbox_json_in_setup(name, state, labels),
+        )
+    }
+
+    /// [`sandbox_json`], in this setup unless `labels` give an `sbx.setup`.
+    fn sandbox_json_in_setup(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> String {
+        let setup = crate::host_service::namespace(&self.ctx.paths);
+        let mut all = labels.to_vec();
+        if !labels.iter().any(|(k, _)| *k == "sbx.setup") {
+            all.push(("sbx.setup", &setup));
+        }
+        sandbox_json(name, state, &all)
     }
 
     /// Makes `machine ls` list these (name, state, labels) sandboxes and `machine status -n` answer
@@ -164,7 +177,7 @@ impl TestEnv {
     pub fn sandboxes(&self, list: &[Listed]) -> &FakeRunner {
         let jsons: Vec<String> = list
             .iter()
-            .map(|(name, state, labels)| sandbox_json(name, state, labels))
+            .map(|(name, state, labels)| self.sandbox_json_in_setup(name, state, labels))
             .collect();
         let fake = self.runner();
         fake.ok(
@@ -180,7 +193,11 @@ impl TestEnv {
 
     /// Sandbox `claude-proj`, running, with workspace `/w/proj`.
     pub fn running_proj(&self) -> &FakeRunner {
-        self.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")])
+        self.sandbox(
+            "claude-proj",
+            "running",
+            &[("sbx.workspaces", r#"["/w/proj"]"#)],
+        )
     }
 
     /// Sandbox `name` is missing until the command creates it, then exists as `created`.
@@ -191,20 +208,20 @@ impl TestEnv {
 
     /// Sandbox `claude-proj`, whose workspace is the cwd.
     pub fn project(&self, state: &str) -> &FakeRunner {
-        let ws = self.ctx.cwd.display().to_string();
+        let ws = workspaces_label(&[&self.ctx.cwd.display().to_string()]);
         self.sandbox("claude-proj", state, &Self::project_labels(&ws))
     }
 
     /// `claude-proj` is missing until the command creates it, then exists as `created`.
     pub fn project_creatable(&self) -> &FakeRunner {
-        let ws = self.ctx.cwd.display().to_string();
+        let ws = workspaces_label(&[&self.ctx.cwd.display().to_string()]);
         self.creatable("claude-proj", &Self::project_labels(&ws))
     }
 
     fn project_labels(ws: &str) -> [(&str, &str); 3] {
         [
             ("sbx.agent", "claude"),
-            ("sbx.workspace", ws),
+            ("sbx.workspaces", ws),
             (
                 "sbx.command",
                 r#"["claude","--dangerously-skip-permissions"]"#,
@@ -318,6 +335,11 @@ pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> Stri
     .to_string()
 }
 
+/// An `sbx.workspaces` label value listing `paths`.
+pub fn workspaces_label(paths: &[&str]) -> String {
+    serde_json::to_string(paths).unwrap()
+}
+
 /// `machine status --json` output for sandbox `name`: `sbx.name`, `labels`, and `sbx.command` =
 /// `["bash"]` unless `labels` give one.
 pub fn sandbox_json(name: &str, state: &str, labels: &[(&str, &str)]) -> String {
@@ -380,7 +402,7 @@ fn probe(
     socket: fn(&str) -> std::path::PathBuf,
 ) -> (String, Seen) {
     let name = format!("{kind}-{}-{tag}", std::process::id());
-    let mut labels = vec![("sbx.agent", "shell"), ("sbx.workspace", "/w/proj")];
+    let mut labels = vec![("sbx.agent", "shell"), ("sbx.workspaces", r#"["/w/proj"]"#)];
     labels.extend(label);
     // Later registrations win: the catch-all goes first.
     t.runner().ok(&["machine"], "");

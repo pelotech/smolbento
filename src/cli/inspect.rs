@@ -63,7 +63,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         state: super::ls::status(sb.state),
         created_version: format!("v{}", m.version),
         image: sb.image.as_deref(),
-        workspace: m.workspace.as_deref(),
+        workspace: m.workspace(),
         clone_source: m.clone_repo.as_deref(),
         secrets: &m.rec.secrets,
         // smolvm publishes TCP on 127.0.0.1 only; sbx's measured form.
@@ -158,7 +158,6 @@ mod tests {
             },
             name: "claude-proj".into(),
             agent: "claude".into(),
-            workspace: Some("/Users/dev/proj".into()),
             workspaces: vec!["/Users/dev/proj".into()],
             created: 999_000,
             version: "0.27.0".into(),

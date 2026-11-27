@@ -447,24 +447,14 @@ impl<R: Runner> Smolvm<R> {
 
     /// Sets several labels in one update, so they change together; running or stopped.
     pub fn set_labels(&self, name: &str, labels: &[(&str, String)]) -> Result<()> {
-        let mut a = args(&["machine", "update", "-n", name]);
-        for (k, v) in labels {
-            flag(&mut a, "--label", format!("{k}={v}"));
-        }
-        self.call(a).map(drop)
-    }
-
-    pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, &[], ports, &[])
-    }
-
-    pub fn unpublish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, ports, &[], &[])
+        self.update(name, &[], &[], labels)
     }
 
     /// Removes the `remove` mappings, adds `add` and sets `labels`, in one update (smolvm removes
-    /// before it adds); nothing to change makes no call.
-    pub fn update_ports(
+    /// before it adds); nothing to change makes no call. On a running machine smolvm applies an
+    /// update live only when it changes ports alone or labels alone (a mix is `INVALID_STATE`);
+    /// mixing them is for a stopped machine.
+    pub fn update(
         &self,
         name: &str,
         remove: &[PortMap],
@@ -534,21 +524,20 @@ impl<R: Runner> Smolvm<R> {
 
     /// Downloads the running machine's file `src` to the host's `dst`.
     pub fn download(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
-        let dst = dst.display().to_string();
-        self.call(args(&[
-            "machine", "files", "--name", name, "download", src, &dst,
-        ]))
-        .map(drop)
+        self.files_to_host(name, "download", src, dst)
     }
 
     /// Downloads the running machine's directory `src` to the host's `dst` as a tar archive,
     /// without following its links.
     pub fn archive(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
+        self.files_to_host(name, "archive", src, dst)
+    }
+
+    /// `machine files --name NAME <op> SRC DST`, writing to the host's `dst`.
+    fn files_to_host(&self, name: &str, op: &str, src: &str, dst: &Path) -> Result<()> {
         let dst = dst.display().to_string();
-        self.call(args(&[
-            "machine", "files", "--name", name, "archive", src, &dst,
-        ]))
-        .map(drop)
+        self.call(args(&["machine", "files", "--name", name, op, src, &dst]))
+            .map(drop)
     }
 
     /// Whether `path` in the running machine is a directory: `machine files list` lists only
@@ -761,15 +750,31 @@ mod tests {
             udp: false,
         };
         vm.update_network("m", &NetworkSpec::Open).unwrap();
-        vm.publish("m", &[p]).unwrap();
-        vm.unpublish("m", &[p]).unwrap();
+        vm.update("m", &[p], &[p], &[]).unwrap();
+        vm.set_label("m", "k", "v").unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec![
                 "machine update -n m --net --reset-allow-list",
-                "machine update -n m -p 8080:80",
-                "machine update -n m --remove-port 8080:80",
+                "machine update -n m --remove-port 8080:80 -p 8080:80",
+                "machine update -n m --label k=v",
             ]
+        );
+    }
+
+    /// Ports and labels in one update, as on a stopped machine.
+    #[test]
+    fn a_stopped_machine_updates_ports_and_labels_together() {
+        let vm = Smolvm::new(FakeRunner::new());
+        let p = PortMap {
+            host: 8080,
+            guest: 80,
+            udp: false,
+        };
+        vm.update("m", &[p], &[p], &[("k", "v".into())]).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            ["machine update -n m --remove-port 8080:80 -p 8080:80 --label k=v"]
         );
     }
 
@@ -839,10 +844,9 @@ mod tests {
     }
 
     #[test]
-    fn publishing_no_ports_makes_no_call() {
+    fn updating_no_ports_makes_no_call() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.publish("m", &[]).unwrap();
-        vm.unpublish("m", &[]).unwrap();
+        vm.update("m", &[], &[], &[]).unwrap();
         assert!(vm.runner().call_lines().is_empty());
     }
 

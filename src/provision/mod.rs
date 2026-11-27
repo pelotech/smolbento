@@ -136,17 +136,27 @@ fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<Start
     })
 }
 
-/// `sandbox::ensure_running` with this context's plan; also brings the sandbox's host service
-/// units up to date and sweeps the leftovers of removed sandboxes.
+/// `start_if_stopped` with this context's plan.
 pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
+    let meta = sb.meta.clone();
+    start_if_stopped(ctx, sb, || start_plan(ctx, &meta))
+}
+
+/// Starts `sb` if it's stopped, with `before_start` before and its egress warnings after; also
+/// brings the sandbox's host service units up to date and sweeps the leftovers of removed
+/// sandboxes. `plan` is only called for a start.
+pub(crate) fn start_if_stopped<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &mut Sandbox,
+    plan: impl FnOnce() -> Result<StartPlan>,
+) -> Result<()> {
     sweep_orphans(ctx);
     refresh_services(ctx, sb);
-    let meta = sb.meta.clone();
     if sb.is_running() {
-        return sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta));
+        return Ok(());
     }
     before_start(ctx, sb);
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
+    sandbox::ensure_running(&ctx.vm, sb, plan)?;
     print_egress_warnings(ctx, sb.name());
     Ok(())
 }

@@ -96,11 +96,9 @@ impl CreateRequest {
 
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
-    let primary = req.workspaces.first().map(|w| w.path.display().to_string());
     Meta {
         name: req.name.clone(),
         agent: req.agent.clone(),
-        workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         version: env!("CARGO_PKG_VERSION").into(),
@@ -244,7 +242,10 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         labels: meta.to_labels(),
         mounts,
         mount_sockets,
-        workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
+        workdir: meta
+            .clone_repo
+            .clone()
+            .or_else(|| meta.workspace().map(String::from)),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
         storage_gib: req.storage_gib,
@@ -410,7 +411,6 @@ mod tests {
         let spec = spec(&req);
         assert_eq!(spec.name, "sbx-claude_repo");
         assert_eq!(spec.labels["sbx.name"], "claude.repo");
-        assert_eq!(spec.labels["sbx.workspace"], "/w/repo");
         assert_eq!(spec.labels["sbx.docker"], "true");
         let mounts = flag_values(&spec.to_args(), "-v");
         assert_eq!(
@@ -540,25 +540,11 @@ mod tests {
         );
         // The clone isn't there until the first start, so the workload starts in the volume.
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
-        assert_eq!(spec.labels["sbx.clone"], "true");
-        assert_eq!(spec.labels["sbx.clone-top"], "/w/repo");
-        assert_eq!(spec.labels["sbx.workspace"], "/w/repo/sub");
-    }
-
-    #[test]
-    fn clone_at_the_repo_top_has_no_clone_top_label() {
-        let ws = vec![Workspace {
-            path: "/w/repo".into(),
-            read_only: false,
-        }];
-        let mut req = request(false, ws);
-        req.clone = Some(CloneSource {
-            top: "/w/repo".into(),
-            git_dir: "/w/repo/.git".into(),
-        });
-        let spec = spec(&req);
-        assert_eq!(spec.labels["sbx.clone"], "true");
-        assert!(!spec.labels.contains_key("sbx.clone-top"));
+        assert_eq!(spec.labels["sbx.clone"], "/w/repo");
+        assert_eq!(
+            spec.labels["sbx.workspaces"],
+            r#"["/w/repo/sub","/w/docs:ro"]"#
+        );
     }
 
     #[test]
@@ -566,7 +552,7 @@ mod tests {
         let spec = spec(&request(false, vec![]));
         assert!(spec.mounts.is_empty());
         assert_eq!(spec.workdir, None);
-        assert!(!spec.labels.contains_key("sbx.workspace"));
+        assert_eq!(spec.labels["sbx.workspaces"], "[]");
         assert_eq!(spec.labels["sbx.docker"], "false");
     }
 

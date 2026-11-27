@@ -246,17 +246,7 @@ impl Runner for ProcessRunner {
         env: &[(String, String)],
         remove: &[String],
     ) -> Result<Output> {
-        let span = self.trace(args);
-        let out = self
-            .command(args, env, remove)?
-            .output()
-            .with_context(|| self.spawn_error())?;
-        span.record("code", exit_code(out.status));
-        Ok(Output {
-            code: exit_code(out.status),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+        self.run_streaming(args, env, remove, &mut |_| {})
     }
 
     fn run_streaming(
