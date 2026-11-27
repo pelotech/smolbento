@@ -447,11 +447,7 @@ impl<R: Runner> Smolvm<R> {
 
     /// Sets several labels in one update, so they change together; running or stopped.
     pub fn set_labels(&self, name: &str, labels: &[(&str, String)]) -> Result<()> {
-        let mut a = args(&["machine", "update", "-n", name]);
-        for (k, v) in labels {
-            flag(&mut a, "--label", format!("{k}={v}"));
-        }
-        self.call(a).map(drop)
+        self.update_ports(name, &[], &[], labels)
     }
 
     /// Removes the `remove` mappings, adds `add` and sets `labels`, in one update (smolvm removes
@@ -526,21 +522,20 @@ impl<R: Runner> Smolvm<R> {
 
     /// Downloads the running machine's file `src` to the host's `dst`.
     pub fn download(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
-        let dst = dst.display().to_string();
-        self.call(args(&[
-            "machine", "files", "--name", name, "download", src, &dst,
-        ]))
-        .map(drop)
+        self.files_to_host(name, "download", src, dst)
     }
 
     /// Downloads the running machine's directory `src` to the host's `dst` as a tar archive,
     /// without following its links.
     pub fn archive(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
+        self.files_to_host(name, "archive", src, dst)
+    }
+
+    /// `machine files --name NAME <op> SRC DST`, writing to the host's `dst`.
+    fn files_to_host(&self, name: &str, op: &str, src: &str, dst: &Path) -> Result<()> {
         let dst = dst.display().to_string();
-        self.call(args(&[
-            "machine", "files", "--name", name, "archive", src, &dst,
-        ]))
-        .map(drop)
+        self.call(args(&["machine", "files", "--name", name, op, src, &dst]))
+            .map(drop)
     }
 
     /// Whether `path` in the running machine is a directory: `machine files list` lists only
