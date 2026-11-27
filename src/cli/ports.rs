@@ -53,9 +53,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
             .filter(|(spec, _)| options::picks_host(spec))
             .map(|(_, p)| p.arg()),
     );
-    let label = (auto != sb.meta.rec.auto_ports).then(|| (labels::AUTO_PORTS, auto.join(",")));
     ctx.vm
-        .update_ports(&sb.machine, &unpublish, &publish, label.as_slice())?;
+        .update_ports(&sb.machine, &unpublish, &publish, &[])?;
+    // Its own update: smolvm applies one to a running machine only when it changes ports alone
+    // or labels alone (a mix is INVALID_STATE).
+    if auto != sb.meta.rec.auto_ports {
+        ctx.vm
+            .set_label(&sb.machine, labels::AUTO_PORTS, &auto.join(","))?;
+    }
     if a.output.is_table() {
         for p in &publish {
             writeln!(&ctx.out, "Published 127.0.0.1:{} -> {}", p.host, p.guest)?;
@@ -192,17 +197,26 @@ mod tests {
         let mut t = test_env(&[]);
         t.sandbox("a1", "running", &[("sbx.auto-ports", "40001:80")]);
         t.sbt(&["ports", "a1", "--publish", "81"]).unwrap();
-        // One update publishes it and records it.
-        let update = t.calls().last().unwrap().clone();
-        let (port, picked) = update
+        // Two updates: smolvm refuses ports and labels together on a running machine.
+        let calls = t.calls();
+        let [publish, label] = &calls[calls.len() - 2..] else {
+            unreachable!()
+        };
+        let port = publish
             .strip_prefix("machine update -n sbx-a1 -p ")
-            .and_then(|r| r.split_once(" --label sbx.auto-ports=40001:80,"))
-            .unwrap_or_else(|| panic!("{update}"));
-        assert!(picked.ends_with(":81") && port == picked, "{update}");
+            .unwrap_or_else(|| panic!("{publish}"));
+        let picked = label
+            .strip_prefix("machine update -n sbx-a1 --label sbx.auto-ports=40001:80,")
+            .unwrap_or_else(|| panic!("{label}"));
+        assert!(picked.ends_with(":81") && port == picked, "{calls:?}");
         t.sbt(&["ports", "a1", "--unpublish", "40001:80"]).unwrap();
+        let calls = t.calls();
         assert_eq!(
-            t.calls().last().unwrap(),
-            "machine update -n sbx-a1 --remove-port 40001:80 --label sbx.auto-ports="
+            calls[calls.len() - 2..],
+            [
+                "machine update -n sbx-a1 --remove-port 40001:80",
+                "machine update -n sbx-a1 --label sbx.auto-ports=",
+            ]
         );
     }
 
@@ -218,10 +232,10 @@ mod tests {
             &crate::testutil::sandbox_json("a1", "stopped", &[("sbx.auto-ports", "40001:80")]),
         );
         t.sbt(&["ports", "a1", "--publish", "81"]).unwrap();
-        let update = t.calls().last().unwrap().clone();
+        let label = t.calls().last().unwrap().clone();
         assert!(
-            update.contains(" --label sbx.auto-ports=45000:80,"),
-            "{update}"
+            label.starts_with("machine update -n sbx-a1 --label sbx.auto-ports=45000:80,"),
+            "{label}"
         );
     }
 
