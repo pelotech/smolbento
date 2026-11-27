@@ -454,14 +454,6 @@ impl<R: Runner> Smolvm<R> {
         self.call(a).map(drop)
     }
 
-    pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, &[], ports, &[])
-    }
-
-    pub fn unpublish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        self.update_ports(name, ports, &[], &[])
-    }
-
     /// Removes the `remove` mappings, adds `add` and sets `labels`, in one update (smolvm removes
     /// before it adds); nothing to change makes no call.
     pub fn update_ports(
@@ -761,14 +753,13 @@ mod tests {
             udp: false,
         };
         vm.update_network("m", &NetworkSpec::Open).unwrap();
-        vm.publish("m", &[p]).unwrap();
-        vm.unpublish("m", &[p]).unwrap();
+        vm.update_ports("m", &[p], &[p], &[("k", "v".into())])
+            .unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec![
                 "machine update -n m --net --reset-allow-list",
-                "machine update -n m -p 8080:80",
-                "machine update -n m --remove-port 8080:80",
+                "machine update -n m --remove-port 8080:80 -p 8080:80 --label k=v",
             ]
         );
     }
@@ -839,10 +830,9 @@ mod tests {
     }
 
     #[test]
-    fn publishing_no_ports_makes_no_call() {
+    fn updating_no_ports_makes_no_call() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.publish("m", &[]).unwrap();
-        vm.unpublish("m", &[]).unwrap();
+        vm.update_ports("m", &[], &[], &[]).unwrap();
         assert!(vm.runner().call_lines().is_empty());
     }
 
