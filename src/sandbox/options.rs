@@ -77,29 +77,21 @@ pub fn default_memory_mib(host_mib: u64) -> u64 {
 }
 
 pub fn host_memory_mib() -> Result<u64> {
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
-        let out = std::process::Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-            .context("running sysctl")?;
-        let bytes: u64 = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse()
-            .context("parsing hw.memsize")?;
-        Ok(bytes >> 20)
+        // SAFETY: sysconf reads system values and has no preconditions.
+        let (pages, size) = unsafe {
+            (
+                libc::sysconf(libc::_SC_PHYS_PAGES),
+                libc::sysconf(libc::_SC_PAGESIZE),
+            )
+        };
+        if pages <= 0 || size <= 0 {
+            bail!("reading host memory: sysconf failed");
+        }
+        Ok((pages as u64 * size as u64) >> 20)
     }
-    #[cfg(target_os = "linux")]
-    {
-        let info = fs::read_to_string("/proc/meminfo").context("reading /proc/meminfo")?;
-        let kb: u64 = info
-            .lines()
-            .find_map(|l| l.strip_prefix("MemTotal:"))
-            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
-            .context("MemTotal missing from /proc/meminfo")?;
-        Ok(kb >> 10)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(unix))]
     {
         bail!("reading host memory is not supported on this platform")
     }
